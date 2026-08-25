@@ -7,12 +7,52 @@ require_role('owner');
 
 $user = current_user();
 
-$functionTypes = $pdo
-    ->query("SELECT * FROM function_types ORDER BY name")
-    ->fetchAll();
-
 $error = null;
 $success = null;
+
+
+/*
+|--------------------------------------------------------------------------
+| Get Function Types
+|--------------------------------------------------------------------------
+*/
+
+try {
+
+    $functionStmt = $pdo->query("
+        SELECT id, name
+        FROM function_types
+        ORDER BY name ASC
+    ");
+
+    $functionTypes = $functionStmt->fetchAll(PDO::FETCH_ASSOC);
+
+} catch (PDOException $e) {
+
+    $functionTypes = [];
+
+    $error = 'Unable to load function types. Please check your database.';
+
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Selected Function Types
+|--------------------------------------------------------------------------
+*/
+
+$functions = [];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    $functions = $_POST['functions'] ?? [];
+
+    if (!is_array($functions)) {
+        $functions = [];
+    }
+
+}
 
 
 /*
@@ -23,15 +63,28 @@ $success = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    $name       = trim($_POST['name'] ?? '');
-    $address    = trim($_POST['address'] ?? '');
-    $district   = trim($_POST['district'] ?? '');
-    $contact    = trim($_POST['contact_number'] ?? '');
-    $price      = (float) ($_POST['starting_price'] ?? 0);
-    $minGuests  = (int) ($_POST['min_guests'] ?? 0);
-    $maxGuests  = (int) ($_POST['max_guests'] ?? 0);
-    $desc       = trim($_POST['description'] ?? '');
-    $functions  = $_POST['functions'] ?? [];
+
+    /*
+    |--------------------------------------------------------------------------
+    | Get Form Values
+    |--------------------------------------------------------------------------
+    */
+
+    $name = trim($_POST['name'] ?? '');
+
+    $address = trim($_POST['address'] ?? '');
+
+    $district = trim($_POST['district'] ?? '');
+
+    $contact = trim($_POST['contact_number'] ?? '');
+
+    $price = (float) ($_POST['starting_price'] ?? 0);
+
+    $minGuests = (int) ($_POST['min_guests'] ?? 0);
+
+    $maxGuests = (int) ($_POST['max_guests'] ?? 0);
+
+    $desc = trim($_POST['description'] ?? '');
 
 
     /*
@@ -62,9 +115,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     } else {
 
-        $pdo->beginTransaction();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Start Transaction
+        |--------------------------------------------------------------------------
+        */
 
         try {
+
+            $pdo->beginTransaction();
+
 
             /*
             |--------------------------------------------------------------------------
@@ -90,6 +151,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
             ");
 
+
             $stmt->execute([
                 $user['id'],
                 $name,
@@ -102,7 +164,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $desc
             ]);
 
+
+            /*
+            |--------------------------------------------------------------------------
+            | Get Hotel ID
+            |--------------------------------------------------------------------------
+            */
+
             $hotelId = (int) $pdo->lastInsertId();
+
+
+            if ($hotelId <= 0) {
+
+                throw new Exception(
+                    'Hotel was not created correctly.'
+                );
+
+            }
 
 
             /*
@@ -117,19 +195,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     hotel_id,
                     function_type_id
                 )
-                VALUES (?, ?)
+                VALUES
+                (?, ?)
             ");
+
 
             foreach ($functions as $fid) {
 
                 $fid = (int) $fid;
 
                 if ($fid > 0) {
+
                     $funcStmt->execute([
                         $hotelId,
                         $fid
                     ]);
+
                 }
+
             }
 
 
@@ -141,85 +224,303 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if (
                 isset($_FILES['main_image']) &&
-                $_FILES['main_image']['error'] === UPLOAD_ERR_OK
+                $_FILES['main_image']['error'] !== UPLOAD_ERR_NO_FILE
             ) {
 
+
                 /*
-                | Images are stored here:
-                | /allhotels/api/images/
+                |--------------------------------------------------------------------------
+                | Upload Error Check
+                |--------------------------------------------------------------------------
                 */
 
-            // Main hotel image upload
-                if (
-                    isset($_FILES['main_image']) &&
-                    $_FILES['main_image']['error'] === UPLOAD_ERR_OK
-                ) {
+                $uploadError = $_FILES['main_image']['error'];
 
-                    // Correct folder:
-                    // allhotels/api/images/
-                    $uploadDir = __DIR__ . '/../api/images/';
 
-                    // Create folder if it does not exist
-                    if (!is_dir($uploadDir)) {
-                        mkdir($uploadDir, 0755, true);
-                    }
+                if ($uploadError !== UPLOAD_ERR_OK) {
 
-                    $originalName = $_FILES['main_image']['name'];
-                    $tmpName      = $_FILES['main_image']['tmp_name'];
+                    $uploadErrors = [
 
-                    $ext = strtolower(
-                        pathinfo($originalName, PATHINFO_EXTENSION)
-                    );
+                        UPLOAD_ERR_INI_SIZE =>
+                            'The uploaded image is too large.',
 
-                    $allowed = [
-                        'jpg',
-                        'jpeg',
-                        'png',
-                        'webp'
+                        UPLOAD_ERR_FORM_SIZE =>
+                            'The uploaded image is too large.',
+
+                        UPLOAD_ERR_PARTIAL =>
+                            'The image upload was incomplete.',
+
+                        UPLOAD_ERR_NO_TMP_DIR =>
+                            'PHP temporary upload folder is missing.',
+
+                        UPLOAD_ERR_CANT_WRITE =>
+                            'PHP cannot write the uploaded image.',
+
+                        UPLOAD_ERR_EXTENSION =>
+                            'Image upload was stopped by a PHP extension.'
+
                     ];
 
-                    if (in_array($ext, $allowed, true)) {
 
-                        $filename =
-                            'hotel_' .
-                            $hotelId .
-                            '_main_' .
-                            time() .
-                            '_' .
-                            bin2hex(random_bytes(4)) .
-                            '.' .
-                            $ext;
+                    $message =
+                        $uploadErrors[$uploadError]
+                        ?? 'Unknown image upload error.';
 
-                        $destination = $uploadDir . $filename;
 
-                        if (move_uploaded_file($tmpName, $destination)) {
+                    throw new Exception($message);
 
-                            // Path saved in database
-                            $imagePath = 'api/images/' . $filename;
-
-                            $imgStmt = $pdo->prepare("
-                                INSERT INTO hotel_images
-                                (
-                                    hotel_id,
-                                    image_path,
-                                    is_main
-                                )
-                                VALUES
-                                (?, ?, 1)
-                            ");
-
-                            $imgStmt->execute([
-                                $hotelId,
-                                $imagePath
-                            ]);
-                        }
-                    }
                 }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Upload Directory
+                |--------------------------------------------------------------------------
+                |
+                | Actual location:
+                |
+                | /allhotels/api/images/
+                |
+                */
+
+                $uploadDir =
+                    __DIR__ . '/../api/images/';
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Create Directory
+                |--------------------------------------------------------------------------
+                */
+
+                if (!is_dir($uploadDir)) {
+
+                    if (!mkdir($uploadDir, 0775, true)) {
+
+                        throw new Exception(
+                            'Unable to create image folder: ' .
+                            $uploadDir
+                        );
+
+                    }
+
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Check Folder Writable
+                |--------------------------------------------------------------------------
+                */
+
+                if (!is_writable($uploadDir)) {
+
+                    throw new Exception(
+                        'Image folder is not writable: ' .
+                        $uploadDir
+                    );
+
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Get Uploaded File
+                |--------------------------------------------------------------------------
+                */
+
+                $tmpName =
+                    $_FILES['main_image']['tmp_name'];
+
+
+                $originalName =
+                    $_FILES['main_image']['name'];
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Check Temporary File
+                |--------------------------------------------------------------------------
+                */
+
+                if (!is_uploaded_file($tmpName)) {
+
+                    throw new Exception(
+                        'Uploaded image was not received correctly.'
+                    );
+
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Get Extension
+                |--------------------------------------------------------------------------
+                */
+
+                $ext = strtolower(
+                    pathinfo(
+                        $originalName,
+                        PATHINFO_EXTENSION
+                    )
+                );
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Allowed Extensions
+                |--------------------------------------------------------------------------
+                */
+
+                $allowedExtensions = [
+                    'jpg',
+                    'jpeg',
+                    'png',
+                    'webp'
+                ];
+
+
+                if (
+                    !in_array(
+                        $ext,
+                        $allowedExtensions,
+                        true
+                    )
+                ) {
+
+                    throw new Exception(
+                        'Invalid image format. Please upload JPG, JPEG, PNG or WEBP.'
+                    );
+
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Check MIME Type
+                |--------------------------------------------------------------------------
+                */
+
+                $allowedMimeTypes = [
+                    'image/jpeg',
+                    'image/png',
+                    'image/webp'
+                ];
+
+
+                $mimeType = '';
+
+
+                if (function_exists('mime_content_type')) {
+
+                    $mimeType =
+                        mime_content_type($tmpName);
+
+                }
+
+
+                if (
+                    $mimeType !== '' &&
+                    !in_array(
+                        $mimeType,
+                        $allowedMimeTypes,
+                        true
+                    )
+                ) {
+
+                    throw new Exception(
+                        'The uploaded file is not a valid image.'
+                    );
+
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Generate Unique Filename
+                |--------------------------------------------------------------------------
+                */
+
+                $filename =
+                    'hotel_' .
+                    $hotelId .
+                    '_main_' .
+                    date('Ymd_His') .
+                    '_' .
+                    bin2hex(random_bytes(5)) .
+                    '.' .
+                    $ext;
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Full Destination
+                |--------------------------------------------------------------------------
+                */
+
+                $destination =
+                    $uploadDir . $filename;
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Move Uploaded File
+                |--------------------------------------------------------------------------
+                */
+
+                if (
+                    !move_uploaded_file(
+                        $tmpName,
+                        $destination
+                    )
+                ) {
+
+                    throw new Exception(
+                        'Failed to save the hotel image. Check folder permissions.'
+                    );
+
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Save Image Path
+                |--------------------------------------------------------------------------
+                */
+
+                $imagePath =
+                    'api/images/' . $filename;
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Insert Image Record
+                |--------------------------------------------------------------------------
+                */
+
+                $imgStmt = $pdo->prepare("
+                    INSERT INTO hotel_images
+                    (
+                        hotel_id,
+                        image_path,
+                        is_main
+                    )
+                    VALUES
+                    (?, ?, 1)
+                ");
+
+
+                $imgStmt->execute([
+                    $hotelId,
+                    $imagePath
+                ]);
+
+            }
 
 
             /*
             |--------------------------------------------------------------------------
-            | Commit
+            | Commit Transaction
             |--------------------------------------------------------------------------
             */
 
@@ -232,32 +533,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             |--------------------------------------------------------------------------
             */
 
-            notify(
-                $pdo,
-                $user['id'],
-                'hotel_submitted',
-                "\"$name\" has been submitted and is pending admin approval.",
-                'both'
-            );
+            try {
 
+                notify(
+                    $pdo,
+                    $user['id'],
+                    'hotel_submitted',
+                    "\"$name\" has been submitted and is pending admin approval.",
+                    'both'
+                );
+
+            } catch (Exception $notificationError) {
+
+                /*
+                | Notification failure should not
+                | cancel successful hotel submission.
+                */
+
+            }
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Success
+            |--------------------------------------------------------------------------
+            */
 
             $success =
                 'Hotel submitted successfully! It will appear publicly once approved by an administrator.';
 
 
+            /*
+            |--------------------------------------------------------------------------
+            | Clear Form
+            |--------------------------------------------------------------------------
+            */
+
+            $_POST = [];
+
+            $functions = [];
+
+
         } catch (Exception $e) {
 
+
+            /*
+            |--------------------------------------------------------------------------
+            | Rollback
+            |--------------------------------------------------------------------------
+            */
+
             if ($pdo->inTransaction()) {
+
                 $pdo->rollBack();
+
             }
+
 
             $error =
                 'Something went wrong while saving your hotel: ' .
                 $e->getMessage();
+
         }
+
     }
+
 }
 
+
+/*
+|--------------------------------------------------------------------------
+| Page
+|--------------------------------------------------------------------------
+*/
 
 $page_title = 'Add Hotel';
 
@@ -265,13 +613,21 @@ require_once __DIR__ . '/../includes/header.php';
 
 ?>
 
+
 <div class="container section">
+
+
+    <!-- ============================================================
+         PAGE HEADER
+    ============================================================= -->
 
     <div class="section-head">
 
         <div>
 
-            <h2>Add a New Hotel</h2>
+            <h2>
+                Add a New Hotel
+            </h2>
 
             <p>
                 Submit your property for admin review.
@@ -283,38 +639,77 @@ require_once __DIR__ . '/../includes/header.php';
     </div>
 
 
+
+    <!-- ============================================================
+         DASHBOARD LAYOUT
+    ============================================================= -->
+
     <div class="dash-layout">
+
+
+        <!-- OWNER NAV -->
 
         <?php include __DIR__ . '/_nav.php'; ?>
 
 
+
+        <!-- ========================================================
+             MAIN PANEL
+        ========================================================= -->
+
         <div class="panel">
+
+
+            <!-- ====================================================
+                 ERROR MESSAGE
+            ===================================================== -->
 
             <?php if ($error): ?>
 
                 <div class="alert alert-error">
+
                     <?= h($error) ?>
+
                 </div>
 
             <?php endif; ?>
 
+
+
+            <!-- ====================================================
+                 SUCCESS MESSAGE
+            ===================================================== -->
 
             <?php if ($success): ?>
 
                 <div class="alert alert-success">
+
                     <?= h($success) ?>
+
                 </div>
 
             <?php endif; ?>
 
+
+
+            <!-- ====================================================
+                 ADD HOTEL FORM
+            ===================================================== -->
 
             <form
                 method="POST"
                 enctype="multipart/form-data"
             >
 
+
+                <!-- =================================================
+                     HOTEL DETAILS
+                ================================================== -->
+
                 <div class="form-row">
 
+
+                    <!-- HOTEL NAME -->
 
                     <div class="form-group">
 
@@ -326,11 +721,16 @@ require_once __DIR__ . '/../includes/header.php';
                             type="text"
                             id="name"
                             name="name"
+                            value="<?= h($_POST['name'] ?? '') ?>"
+                            placeholder="e.g. Ocean View Hotel"
                             required
                         >
 
                     </div>
 
+
+
+                    <!-- ADDRESS -->
 
                     <div class="form-group">
 
@@ -342,11 +742,16 @@ require_once __DIR__ . '/../includes/header.php';
                             type="text"
                             id="address"
                             name="address"
+                            value="<?= h($_POST['address'] ?? '') ?>"
+                            placeholder="e.g. Beach Road"
                             required
                         >
 
                     </div>
 
+
+
+                    <!-- CONTACT -->
 
                     <div class="form-group">
 
@@ -358,11 +763,15 @@ require_once __DIR__ . '/../includes/header.php';
                             type="text"
                             id="contact_number"
                             name="contact_number"
+                            value="<?= h($_POST['contact_number'] ?? '') ?>"
                             placeholder="+94 77 123 4567"
                         >
 
                     </div>
 
+
+
+                    <!-- DISTRICT -->
 
                     <div class="form-group">
 
@@ -374,12 +783,16 @@ require_once __DIR__ . '/../includes/header.php';
                             type="text"
                             id="district"
                             name="district"
+                            value="<?= h($_POST['district'] ?? '') ?>"
                             placeholder="e.g. Galle"
                             required
                         >
 
                     </div>
 
+
+
+                    <!-- STARTING PRICE -->
 
                     <div class="form-group">
 
@@ -391,13 +804,18 @@ require_once __DIR__ . '/../includes/header.php';
                             type="number"
                             id="starting_price"
                             name="starting_price"
-                            min="0"
+                            value="<?= h($_POST['starting_price'] ?? '') ?>"
+                            min="1"
                             step="500"
+                            placeholder="e.g. 50000"
                             required
                         >
 
                     </div>
 
+
+
+                    <!-- MIN GUESTS -->
 
                     <div class="form-group">
 
@@ -409,11 +827,16 @@ require_once __DIR__ . '/../includes/header.php';
                             type="number"
                             id="min_guests"
                             name="min_guests"
+                            value="<?= h($_POST['min_guests'] ?? '') ?>"
                             min="0"
+                            placeholder="e.g. 50"
                         >
 
                     </div>
 
+
+
+                    <!-- MAX GUESTS -->
 
                     <div class="form-group">
 
@@ -425,46 +848,143 @@ require_once __DIR__ . '/../includes/header.php';
                             type="number"
                             id="max_guests"
                             name="max_guests"
+                            value="<?= h($_POST['max_guests'] ?? '') ?>"
                             min="0"
+                            placeholder="e.g. 500"
                         >
 
                     </div>
 
+
                 </div>
 
 
-                <!-- FUNCTION TYPES -->
 
-                <div class="form-group">
+                <!-- =================================================
+                     FUNCTION TYPES
+                ================================================== -->
 
-                    <label>
+                <div class="form-group function-section">
+
+
+                    <label class="function-title">
+
                         Function Types
+
+                        <span class="required-star">
+                            *
+                        </span>
+
                     </label>
 
-                    <div class="checkbox-grid">
 
-                        <?php foreach ($functionTypes as $ft): ?>
 
-                            <label>
+                    <?php if (empty($functionTypes)): ?>
 
-                                <input
-                                    type="checkbox"
-                                    name="functions[]"
-                                    value="<?= (int) $ft['id'] ?>"
+
+                        <!-- NO FUNCTION TYPES -->
+
+                        <div class="function-empty">
+
+                            <strong>
+                                No function types available.
+                            </strong>
+
+                            <p>
+                                Please add function types to the
+                                <strong>function_types</strong>
+                                table in your database.
+                            </p>
+
+                        </div>
+
+
+                    <?php else: ?>
+
+
+                        <!-- FUNCTION GRID -->
+
+                        <div class="function-type-grid">
+
+
+                            <?php
+
+                            $selectedFunctionIds =
+                                array_map(
+                                    'intval',
+                                    $functions
+                                );
+
+                            ?>
+
+
+                            <?php foreach (
+                                $functionTypes
+                                as $ft
+                            ): ?>
+
+
+                                <?php
+
+                                $functionId =
+                                    (int) $ft['id'];
+
+                                $isChecked =
+                                    in_array(
+                                        $functionId,
+                                        $selectedFunctionIds,
+                                        true
+                                    );
+
+                                ?>
+
+
+                                <label
+                                    class="function-type-item <?= $isChecked ? 'selected' : '' ?>"
                                 >
 
-                                <?= h($ft['name']) ?>
 
-                            </label>
+                                    <input
+                                        type="checkbox"
+                                        name="functions[]"
+                                        value="<?= $functionId ?>"
+                                        <?= $isChecked ? 'checked' : '' ?>
+                                    >
 
-                        <?php endforeach; ?>
 
-                    </div>
+                                    <span class="function-check">
+
+                                        <?= $isChecked ? '✓' : '' ?>
+
+                                    </span>
+
+
+                                    <span class="function-name">
+
+                                        <?= h($ft['name']) ?>
+
+                                    </span>
+
+
+                                </label>
+
+
+                            <?php endforeach; ?>
+
+
+                        </div>
+
+
+                    <?php endif; ?>
+
 
                 </div>
 
 
-                <!-- DESCRIPTION -->
+
+                <!-- =================================================
+                     DESCRIPTION
+                ================================================== -->
 
                 <div class="form-group">
 
@@ -472,23 +992,30 @@ require_once __DIR__ . '/../includes/header.php';
                         Description
                     </label>
 
+
                     <textarea
                         id="description"
                         name="description"
-                        rows="4"
-                        placeholder="Describe your venue..."
-                    ></textarea>
+                        rows="5"
+                        placeholder="Describe your hotel, facilities, services and venue..."
+                    ><?= h($_POST['description'] ?? '') ?></textarea>
 
                 </div>
 
 
-                <!-- MAIN IMAGE -->
+
+                <!-- =================================================
+                     MAIN HOTEL IMAGE
+                ================================================== -->
 
                 <div class="form-group">
 
                     <label for="main_image">
+
                         Main Hotel Image
+
                     </label>
+
 
                     <input
                         type="file"
@@ -497,27 +1024,43 @@ require_once __DIR__ . '/../includes/header.php';
                         accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                     >
 
+
                     <small class="footer-note">
-                        Recommended: JPG, PNG or WEBP.
+
+                        Recommended:
+                        JPG, JPEG, PNG or WEBP.
+                        Maximum recommended size: 5MB.
+
                     </small>
 
                 </div>
 
 
+
+                <!-- =================================================
+                     SUBMIT BUTTON
+                ================================================== -->
+
                 <button
                     type="submit"
                     class="btn btn-primary"
                 >
+
                     Submit Hotel for Approval
+
                 </button>
 
+
             </form>
+
 
         </div>
 
     </div>
 
 </div>
+
+
 
 <?php
 

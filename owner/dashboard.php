@@ -31,7 +31,7 @@ require_once __DIR__ . '/../includes/header.php';
             <h2>Welcome back, <?= h($user['full_name']) ?></h2>
             <p>Here's a quick snapshot of your listings on AllHotels.lk.</p>
         </div>
-        <a href="../owner/add-hotel.php" class="btn btn-terracotta">+ Add New Hotel</a>
+        <a href="/allhotels/owner/add-hotel.php" class="btn btn-terracotta">+ Add New Hotel</a>
     </div>
 
     <div class="dash-layout">

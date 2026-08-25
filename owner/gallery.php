@@ -48,7 +48,7 @@ $selectedId = (int) (
 
 /*
 |--------------------------------------------------------------------------
-| Validate Selected Hotel Belongs To Owner + Premium
+| Validate Selected Hotel
 |--------------------------------------------------------------------------
 */
 
@@ -81,11 +81,200 @@ if ($selectedId > 0) {
 
 /*
 |--------------------------------------------------------------------------
-| Handle Image Upload
+| DELETE IMAGE
 |--------------------------------------------------------------------------
 */
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST'
+    && ($_POST['action'] ?? '') === 'delete_image'
+) {
+
+    $hotelId = (int) ($_POST['hotel_id'] ?? 0);
+    $imageId = (int) ($_POST['image_id'] ?? 0);
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Check Hotel Belongs To Current Owner
+    |--------------------------------------------------------------------------
+    */
+
+    $checkHotel = $pdo->prepare("
+        SELECT id
+        FROM hotels
+        WHERE id = ?
+          AND user_id = ?
+          AND is_premium = 1
+          AND status = 'approved'
+        LIMIT 1
+    ");
+
+    $checkHotel->execute([
+        $hotelId,
+        $user['id']
+    ]);
+
+    $hotelExists = $checkHotel->fetchColumn();
+
+
+    if (!$hotelExists) {
+
+        $error = 'Invalid hotel selected.';
+
+    } else {
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Get Image
+        |--------------------------------------------------------------------------
+        */
+
+        $imageStmt = $pdo->prepare("
+            SELECT *
+            FROM hotel_images
+            WHERE id = ?
+              AND hotel_id = ?
+            LIMIT 1
+        ");
+
+        $imageStmt->execute([
+            $imageId,
+            $hotelId
+        ]);
+
+        $image = $imageStmt->fetch(PDO::FETCH_ASSOC);
+
+
+        if (!$image) {
+
+            $error = 'Image not found.';
+
+        } else {
+
+            try {
+
+                $pdo->beginTransaction();
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Delete Database Record
+                |--------------------------------------------------------------------------
+                */
+
+                $deleteStmt = $pdo->prepare("
+                    DELETE FROM hotel_images
+                    WHERE id = ?
+                      AND hotel_id = ?
+                ");
+
+                $deleteStmt->execute([
+                    $imageId,
+                    $hotelId
+                ]);
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | If Deleted Image Was Main
+                |--------------------------------------------------------------------------
+                */
+
+                if ((int) $image['is_main'] === 1) {
+
+                    $newMainStmt = $pdo->prepare("
+                        SELECT id
+                        FROM hotel_images
+                        WHERE hotel_id = ?
+                        ORDER BY id DESC
+                        LIMIT 1
+                    ");
+
+                    $newMainStmt->execute([
+                        $hotelId
+                    ]);
+
+                    $newMainId = $newMainStmt->fetchColumn();
+
+
+                    if ($newMainId) {
+
+                        $makeMainStmt = $pdo->prepare("
+                            UPDATE hotel_images
+                            SET is_main = 1
+                            WHERE id = ?
+                        ");
+
+                        $makeMainStmt->execute([
+                            $newMainId
+                        ]);
+                    }
+                }
+
+
+                $pdo->commit();
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Delete Physical File
+                |--------------------------------------------------------------------------
+                */
+
+                $relativePath = ltrim(
+                    $image['image_path'],
+                    '/'
+                );
+
+                $physicalPath =
+                    dirname(__DIR__) .
+                    '/' .
+                    $relativePath;
+
+
+                if (
+                    file_exists($physicalPath)
+                    && is_file($physicalPath)
+                ) {
+
+                    @unlink($physicalPath);
+
+                }
+
+
+                $success = 'Image deleted successfully.';
+
+
+            } catch (Exception $e) {
+
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+
+                $error =
+                    'Unable to delete image: ' .
+                    $e->getMessage();
+            }
+        }
+    }
+
+
+    $selectedId = $hotelId;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| HANDLE IMAGE UPLOAD
+|--------------------------------------------------------------------------
+*/
+
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST'
+    && ($_POST['action'] ?? '') === 'upload_image'
+) {
 
     $hotelId = (int) ($_POST['hotel_id'] ?? 0);
 
@@ -119,25 +308,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Invalid Premium hotel selected.';
 
     } elseif (
-        !isset($_FILES['gallery_image']) ||
-        $_FILES['gallery_image']['error'] !== UPLOAD_ERR_OK
+        !isset($_FILES['gallery_image'])
+        || $_FILES['gallery_image']['error'] !== UPLOAD_ERR_OK
     ) {
 
         $error = 'Please select an image to upload.';
 
     } else {
 
-        /*
-        |--------------------------------------------------------------------------
-        | File Information
-        |--------------------------------------------------------------------------
-        */
-
         $file = $_FILES['gallery_image'];
 
         $originalName = $file['name'];
-        $tmpName = $file['tmp_name'];
-        $fileSize = (int) $file['size'];
+        $tmpName      = $file['tmp_name'];
+        $fileSize     = (int) $file['size'];
 
         $extension = strtolower(
             pathinfo(
@@ -149,7 +332,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         /*
         |--------------------------------------------------------------------------
-        | Allowed Extensions
+        | Validate Extension
         |--------------------------------------------------------------------------
         */
 
@@ -161,32 +344,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ];
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Validate Extension
-        |--------------------------------------------------------------------------
-        */
-
         if (!in_array(
             $extension,
             $allowedExtensions,
             true
         )) {
 
-            $error = 'Only JPG, JPEG, PNG and WEBP images are allowed.';
+            $error =
+                'Only JPG, JPEG, PNG and WEBP images are allowed.';
 
         }
 
 
         /*
         |--------------------------------------------------------------------------
-        | Validate File Size
+        | Validate Size
         |--------------------------------------------------------------------------
         */
 
         elseif ($fileSize > 5 * 1024 * 1024) {
 
-            $error = 'Image size must be less than 5MB.';
+            $error =
+                'Image size must be less than 5MB.';
 
         }
 
@@ -199,7 +378,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         elseif (@getimagesize($tmpName) === false) {
 
-            $error = 'The uploaded file is not a valid image.';
+            $error =
+                'The uploaded file is not a valid image.';
 
         }
 
@@ -214,20 +394,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             /*
             |--------------------------------------------------------------------------
-            | IMPORTANT
-            |
-            | Images will be stored in:
-            |
-            | allhotels/api/images/
+            | Upload Directory
             |--------------------------------------------------------------------------
             */
 
-            $uploadDir = __DIR__ . '/../api/images/';
+            $uploadDir =
+                __DIR__ .
+                '/../api/images/';
 
 
             /*
             |--------------------------------------------------------------------------
-            | Create Folder If Not Exists
+            | Create Directory
             |--------------------------------------------------------------------------
             */
 
@@ -239,16 +417,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     true
                 )) {
 
-                    $error = 'Unable to create image upload folder.';
-
+                    $error =
+                        'Unable to create image upload folder.';
                 }
-
             }
 
 
             /*
             |--------------------------------------------------------------------------
-            | Generate Unique Filename
+            | Check Writable
+            |--------------------------------------------------------------------------
+            */
+
+            if (
+                !$error
+                && !is_writable($uploadDir)
+            ) {
+
+                $error =
+                    'Image folder is not writable: ' .
+                    $uploadDir;
+            }
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Generate Filename
             |--------------------------------------------------------------------------
             */
 
@@ -258,7 +452,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'hotel_' .
                     $hotelId .
                     '_gallery_' .
-                    uniqid('', true) .
+                    time() .
+                    '_' .
+                    bin2hex(random_bytes(5)) .
                     '.' .
                     $extension;
 
@@ -279,16 +475,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $destination
                 )) {
 
-                    $error = 'Unable to save the uploaded image.';
-
+                    $error =
+                        'Unable to save the uploaded image.';
                 }
-
             }
 
 
             /*
             |--------------------------------------------------------------------------
-            | Save Database Record
+            | Save Database
             |--------------------------------------------------------------------------
             */
 
@@ -298,7 +493,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     /*
                     |--------------------------------------------------------------------------
-                    | Check whether hotel already has a main image
+                    | Check Main Image
                     |--------------------------------------------------------------------------
                     */
 
@@ -315,32 +510,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ]);
 
                     $hasMainImage =
-                        $mainCheckStmt->fetch();
+                        $mainCheckStmt->fetchColumn();
 
 
                     /*
                     |--------------------------------------------------------------------------
-                    | First image becomes Main Image
+                    | First Image = Main Image
                     |--------------------------------------------------------------------------
                     */
 
-                    $isMain = $hasMainImage
-                        ? 0
-                        : 1;
+                    $isMain =
+                        $hasMainImage ? 0 : 1;
 
 
                     /*
                     |--------------------------------------------------------------------------
-                    | Save Image
+                    | Insert Image
                     |--------------------------------------------------------------------------
-                    |
-                    | Database:
-                    |
-                    | id
-                    | hotel_id
-                    | image_path
-                    | is_main
-                    |
                     */
 
                     $insertStmt = $pdo->prepare("
@@ -350,12 +536,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             image_path,
                             is_main
                         )
-                        VALUES
-                        (
-                            ?,
-                            ?,
-                            ?
-                        )
+                        VALUES (?, ?, ?)
                     ");
 
                     $insertStmt->execute([
@@ -366,57 +547,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
                     $success =
-                        'Image uploaded successfully!';
+                        'Image uploaded successfully.';
 
 
                 } catch (PDOException $e) {
 
                     /*
                     |--------------------------------------------------------------------------
-                    | Remove uploaded file if DB insert failed
+                    | Remove Physical File If DB Failed
                     |--------------------------------------------------------------------------
                     */
 
                     if (
-                        isset($destination) &&
-                        file_exists($destination)
+                        isset($destination)
+                        && file_exists($destination)
                     ) {
 
-                        unlink($destination);
-
+                        @unlink($destination);
                     }
 
+
                     $error =
-                        'Image could not be saved to the database.';
+                        'Image could not be saved to database.';
 
                     error_log(
                         'Gallery Upload Error: ' .
                         $e->getMessage()
                     );
-
                 }
-
             }
-
         }
-
     }
 
 
-    /*
-    |--------------------------------------------------------------------------
-    | Keep Selected Hotel
-    |--------------------------------------------------------------------------
-    */
-
     $selectedId = $hotelId;
-
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| Get Images For Selected Hotel
+| Refresh Selected Hotel
+|--------------------------------------------------------------------------
+*/
+
+if ($selectedId > 0) {
+
+    $hotelStmt = $pdo->prepare("
+        SELECT *
+        FROM hotels
+        WHERE id = ?
+          AND user_id = ?
+          AND is_premium = 1
+          AND status = 'approved'
+        LIMIT 1
+    ");
+
+    $hotelStmt->execute([
+        $selectedId,
+        $user['id']
+    ]);
+
+    $selectedHotel =
+        $hotelStmt->fetch(PDO::FETCH_ASSOC);
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Get Images
 |--------------------------------------------------------------------------
 */
 
@@ -437,8 +635,8 @@ if ($selectedId > 0) {
         $selectedId
     ]);
 
-    $images = $imgStmt->fetchAll(PDO::FETCH_ASSOC);
-
+    $images =
+        $imgStmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 
@@ -458,20 +656,17 @@ require_once __DIR__ . '/../includes/header.php';
 <div class="container section">
 
 
-    <!-- =========================================================
-         PAGE HEADER
-    ========================================================== -->
+    <!-- PAGE HEADER -->
 
     <div class="section-head">
 
         <div>
 
-            <h2>
-                Hotel Gallery
-            </h2>
+            <h2>Hotel Gallery</h2>
 
             <p>
-                Upload photos for your Premium hotel listings.
+                Manage photos and hotel information
+                for your Premium hotels.
             </p>
 
         </div>
@@ -482,19 +677,15 @@ require_once __DIR__ . '/../includes/header.php';
     <div class="dash-layout">
 
 
-        <!-- =====================================================
-             OWNER NAVIGATION
-        ====================================================== -->
+        <!-- OWNER NAV -->
 
         <?php include __DIR__ . '/_nav.php'; ?>
 
 
-        <!-- =====================================================
-             CONTENT
-        ====================================================== -->
-
         <div>
 
+
+            <!-- ALERTS -->
 
             <?php if ($error): ?>
 
@@ -514,30 +705,16 @@ require_once __DIR__ . '/../includes/header.php';
             <?php endif; ?>
 
 
-            <!-- =================================================
-                 NO PREMIUM HOTELS
-            ================================================== -->
-
             <?php if (empty($premiumHotels)): ?>
+
 
                 <div class="panel">
 
-                    <h3>
-                        Premium Gallery
-                    </h3>
+                    <h3>Premium Gallery</h3>
 
                     <p class="footer-note">
-
                         You don't have any approved Premium
                         hotels yet.
-
-                    </p>
-
-                    <p class="footer-note">
-
-                        Gallery upload is available only for
-                        approved Premium hotels.
-
                     </p>
 
                 </div>
@@ -546,9 +723,7 @@ require_once __DIR__ . '/../includes/header.php';
             <?php else: ?>
 
 
-                <!-- =============================================
-                     HOTEL SELECTOR
-                ============================================== -->
+                <!-- HOTEL SELECTOR -->
 
                 <div class="panel">
 
@@ -578,9 +753,7 @@ require_once __DIR__ . '/../includes/header.php';
                                         : ''
                                     ?>
                                 >
-
                                     <?= h($hotel['name']) ?>
-
                                 </option>
 
                             <?php endforeach; ?>
@@ -602,29 +775,35 @@ require_once __DIR__ . '/../includes/header.php';
                         >
 
                             <strong>
-                                <?= h(
-                                    $selectedHotel['name']
-                                ) ?>
+                                <?= h($selectedHotel['name']) ?>
                             </strong>
 
                             <div class="footer-note">
-
                                 ★ Premium Hotel
-
-                                <?php if (
-                                    !empty(
-                                        $selectedHotel['district']
-                                    )
-                                ): ?>
-
-                                    —
-                                    <?= h(
-                                        $selectedHotel['district']
-                                    ) ?>
-
-                                <?php endif; ?>
-
+                                —
+                                <?= h($selectedHotel['district']) ?>
                             </div>
+
+                        </div>
+
+
+                        <!-- EDIT HOTEL BUTTON -->
+
+                        <div
+                            style="
+                                margin-top:15px;
+                                display:flex;
+                                gap:10px;
+                                flex-wrap:wrap;
+                            "
+                        >
+
+                            <a
+                                href="/allhotels/owner/edit-hotel.php?id=<?= (int) $selectedId ?>"
+                                class="btn btn-primary"
+                            >
+                                Edit Hotel Profile
+                            </a>
 
                         </div>
 
@@ -633,24 +812,19 @@ require_once __DIR__ . '/../includes/header.php';
                 </div>
 
 
-                <!-- =============================================
-                     UPLOAD
-                ============================================== -->
-
                 <?php if ($selectedHotel): ?>
+
+
+                    <!-- UPLOAD IMAGE -->
 
                     <div class="panel">
 
-                        <h3>
-                            Upload New Image
-                        </h3>
+                        <h3>Upload New Image</h3>
 
                         <p class="footer-note">
-
                             Add photos of your hotel,
                             hall, wedding area, dining area,
                             rooms, etc.
-
                         </p>
 
 
@@ -658,6 +832,12 @@ require_once __DIR__ . '/../includes/header.php';
                             method="POST"
                             enctype="multipart/form-data"
                         >
+
+                            <input
+                                type="hidden"
+                                name="action"
+                                value="upload_image"
+                            >
 
                             <input
                                 type="hidden"
@@ -681,10 +861,8 @@ require_once __DIR__ . '/../includes/header.php';
                                 >
 
                                 <small class="footer-note">
-
                                     JPG, JPEG, PNG or WEBP.
                                     Maximum 5MB.
-
                                 </small>
 
                             </div>
@@ -702,24 +880,17 @@ require_once __DIR__ . '/../includes/header.php';
                     </div>
 
 
-                    <!-- =========================================
-                         CURRENT IMAGES
-                    ========================================== -->
+                    <!-- CURRENT IMAGES -->
 
                     <div class="panel">
 
-                        <h3>
-                            Current Gallery
-                        </h3>
+                        <h3>Current Gallery</h3>
 
 
                         <?php if (empty($images)): ?>
 
                             <p class="footer-note">
-
-                                No images uploaded for this
-                                hotel yet.
-
+                                No images uploaded yet.
                             </p>
 
                         <?php else: ?>
@@ -731,9 +902,9 @@ require_once __DIR__ . '/../includes/header.php';
                                     grid-template-columns:
                                     repeat(
                                         auto-fill,
-                                        minmax(180px, 1fr)
+                                        minmax(200px,1fr)
                                     );
-                                    gap:18px;
+                                    gap:20px;
                                     margin-top:20px;
                                 "
                             >
@@ -762,15 +933,19 @@ require_once __DIR__ . '/../includes/header.php';
                                             border-radius:12px;
                                             overflow:hidden;
                                             background:#f5f5f5;
+                                            box-shadow:
+                                            0 3px 12px
+                                            rgba(0,0,0,.08);
                                         "
                                     >
 
+
                                         <img
                                             src="/allhotels/<?= h($imagePath) ?>"
-                                            alt="Hotel Gallery"
+                                            alt="Hotel Image"
                                             style="
                                                 width:100%;
-                                                height:180px;
+                                                height:190px;
                                                 object-fit:cover;
                                                 display:block;
                                             "
@@ -788,7 +963,7 @@ require_once __DIR__ . '/../includes/header.php';
                                                     position:absolute;
                                                     top:10px;
                                                     left:10px;
-                                                    background:#000;
+                                                    background:#111;
                                                     color:#fff;
                                                     padding:5px 9px;
                                                     border-radius:5px;
@@ -799,6 +974,61 @@ require_once __DIR__ . '/../includes/header.php';
                                             </div>
 
                                         <?php endif; ?>
+
+
+                                        <!-- DELETE BUTTON -->
+
+                                        <div
+                                            style="
+                                                padding:12px;
+                                                background:#fff;
+                                            "
+                                        >
+
+                                            <form
+                                                method="POST"
+                                                onsubmit="
+                                                    return confirm(
+                                                        'Are you sure you want to delete this image?'
+                                                    );
+                                                "
+                                            >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="action"
+                                                    value="delete_image"
+                                                >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="hotel_id"
+                                                    value="<?= (int) $selectedId ?>"
+                                                >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="image_id"
+                                                    value="<?= (int) $image['id'] ?>"
+                                                >
+
+
+                                                <button
+                                                    type="submit"
+                                                    class="btn btn-sm"
+                                                    style="
+                                                        width:100%;
+                                                        background:#c0392b;
+                                                        color:#fff;
+                                                        border:none;
+                                                    "
+                                                >
+                                                    🗑 Delete Image
+                                                </button>
+
+                                            </form>
+
+                                        </div>
 
                                     </div>
 
@@ -812,6 +1042,7 @@ require_once __DIR__ . '/../includes/header.php';
 
 
                     </div>
+
 
                 <?php endif; ?>
 

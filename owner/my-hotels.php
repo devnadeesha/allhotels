@@ -27,7 +27,7 @@ require_once __DIR__ . '/../includes/header.php';
                 <tbody>
                 <?php foreach ($hotels as $h2): ?>
                     <tr>
-                        <td><a href="/hotel-details.php?id=<?= (int)$h2['id'] ?>"><?= h($h2['name']) ?></a></td>
+                        <td><a href="/allhotels/hotel-details/hotel-details.php?id=<?= (int)$h2['id'] ?>"><?= h($h2['name']) ?></a></td>
                         <td><?= h($h2['district']) ?></td>
                         <td>Rs. <?= number_format($h2['starting_price']) ?></td>
                         <td><?= $h2['is_premium'] ? '★ Premium' : 'Free' ?></td>
@@ -37,6 +37,7 @@ require_once __DIR__ . '/../includes/header.php';
                 <?php endforeach; ?>
                 </tbody>
             </table>
+      
             <?php endif; ?>
         </div>
     </div>
