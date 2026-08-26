@@ -793,7 +793,6 @@ require_once __DIR__ . '/../includes/header.php';
 
 
                     <!-- STARTING PRICE -->
-
                     <div class="form-group">
 
                         <label for="starting_price">
@@ -805,9 +804,9 @@ require_once __DIR__ . '/../includes/header.php';
                             id="starting_price"
                             name="starting_price"
                             value="<?= h($_POST['starting_price'] ?? '') ?>"
-                            min="1"
+                            min="500"
                             step="500"
-                            placeholder="e.g. 50000"
+                            placeholder="e.g. 2500"
                             required
                         >
 
