@@ -1,12 +1,45 @@
 <?php
+
 require_once __DIR__ . '/config/db.php';
 require_once __DIR__ . '/includes/functions.php';
 
 $page_title = 'Home';
 
+
 /*
 |--------------------------------------------------------------------------
-| Districts
+| SEARCH / FILTER VALUES
+|--------------------------------------------------------------------------
+*/
+
+$q = trim($_GET['q'] ?? '');
+
+$district = trim($_GET['district'] ?? '');
+
+$function_type = (int) ($_GET['function_type'] ?? 0);
+
+$guests = (int) ($_GET['guests'] ?? 0);
+
+$max_price = (int) ($_GET['max_price'] ?? 0);
+
+
+/*
+|--------------------------------------------------------------------------
+| PAGINATION
+|--------------------------------------------------------------------------
+*/
+
+$perPage = 6;
+
+$currentPage = max(
+    1,
+    (int) ($_GET['page'] ?? 1)
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| DISTRICTS
 |--------------------------------------------------------------------------
 */
 
@@ -22,7 +55,7 @@ $districts = $pdo->query("
 
 /*
 |--------------------------------------------------------------------------
-| Function Types
+| FUNCTION TYPES
 |--------------------------------------------------------------------------
 */
 
@@ -35,12 +68,12 @@ $functionTypes = $pdo->query("
 
 /*
 |--------------------------------------------------------------------------
-| Get Approved Hotels
+| GET APPROVED HOTELS
 |--------------------------------------------------------------------------
 */
 
-$hotels = $pdo->query("
-    SELECT 
+$sql = "
+    SELECT
         h.*,
 
         (
@@ -72,23 +105,297 @@ $hotels = $pdo->query("
     FROM hotels h
 
     WHERE h.status = 'approved'
+";
 
-    ORDER BY
-        h.is_premium DESC,
-        h.created_at DESC
-")->fetchAll(PDO::FETCH_ASSOC);
+$params = [];
 
 
 /*
 |--------------------------------------------------------------------------
-| Limit Initial Hotels to 8
+| SEARCH HOTEL
 |--------------------------------------------------------------------------
 */
 
-$displayHotels = array_slice($hotels, 0, 8);
+if ($q !== '') {
+
+    $sql .= "
+        AND (
+            h.name LIKE ?
+            OR h.address LIKE ?
+            OR h.district LIKE ?
+        )
+    ";
+
+    $searchTerm = '%' . $q . '%';
+
+    $params[] = $searchTerm;
+    $params[] = $searchTerm;
+    $params[] = $searchTerm;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| DISTRICT FILTER
+|--------------------------------------------------------------------------
+*/
+
+if ($district !== '') {
+
+    $sql .= "
+        AND h.district = ?
+    ";
+
+    $params[] = $district;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| FUNCTION TYPE FILTER
+|--------------------------------------------------------------------------
+*/
+
+if ($function_type > 0) {
+
+    $sql .= "
+        AND EXISTS (
+            SELECT 1
+            FROM hotel_function_types hft_filter
+            WHERE hft_filter.hotel_id = h.id
+              AND hft_filter.function_type_id = ?
+        )
+    ";
+
+    $params[] = $function_type;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| GUEST CAPACITY FILTER
+|--------------------------------------------------------------------------
+|
+| This assumes your hotels table uses:
+| guest_capacity
+|
+| If your actual column name is different,
+| change h.guest_capacity below.
+|
+|--------------------------------------------------------------------------
+*/
+
+if ($guests > 0) {
+
+    $sql .= "
+        AND h.guest_capacity >= ?
+    ";
+
+    $params[] = $guests;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| MAX PRICE FILTER
+|--------------------------------------------------------------------------
+*/
+
+if ($max_price > 0) {
+
+    $sql .= "
+        AND h.starting_price <= ?
+    ";
+
+    $params[] = $max_price;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| ORDER
+|--------------------------------------------------------------------------
+|
+| Premium hotels first.
+| Newest hotels after that.
+|
+|--------------------------------------------------------------------------
+*/
+
+$sql .= "
+    ORDER BY
+        h.is_premium DESC,
+        h.created_at DESC
+";
+
+
+$stmt = $pdo->prepare($sql);
+
+$stmt->execute($params);
+
+$hotels = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+/*
+|--------------------------------------------------------------------------
+| PAGINATION CALCULATION
+|--------------------------------------------------------------------------
+*/
+
+$totalHotels = count($hotels);
+
+$totalPages = max(
+    1,
+    (int) ceil($totalHotels / $perPage)
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| VALID CURRENT PAGE
+|--------------------------------------------------------------------------
+*/
+
+if ($currentPage > $totalPages) {
+
+    $currentPage = $totalPages;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| GET ONLY 6 HOTELS FOR CURRENT PAGE
+|--------------------------------------------------------------------------
+*/
+
+$offset = ($currentPage - 1) * $perPage;
+
+$displayHotels = array_slice(
+    $hotels,
+    $offset,
+    $perPage
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| PAGINATION URL
+|--------------------------------------------------------------------------
+|
+| Keeps search/filter values when changing pages.
+|
+|--------------------------------------------------------------------------
+*/
+
+function pageUrl($page)
+{
+    $params = $_GET;
+
+    $params['page'] = $page;
+
+    return '?' . http_build_query($params);
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| PAGINATION PAGE NUMBERS
+|--------------------------------------------------------------------------
+|
+| Example:
+|
+| 1 2 3 4 5 ... 100
+|
+| When current page is in the middle:
+|
+| 1 ... 48 49 50 51 52 ... 100
+|
+|--------------------------------------------------------------------------
+*/
+
+$pageNumbers = [];
+
+
+/*
+|--------------------------------------------------------------------------
+| FIRST PAGE
+|--------------------------------------------------------------------------
+*/
+
+$pageNumbers[] = 1;
+
+
+/*
+|--------------------------------------------------------------------------
+| PAGES AROUND CURRENT PAGE
+|--------------------------------------------------------------------------
+*/
+
+if ($totalPages > 1) {
+
+    $startPage = max(
+        2,
+        $currentPage - 2
+    );
+
+    $endPage = min(
+        $totalPages - 1,
+        $currentPage + 2
+    );
+
+
+    /*
+    | Add dots after page 1
+    */
+
+    if ($startPage > 2) {
+
+        $pageNumbers[] = '...';
+    }
+
+
+    /*
+    | Add middle pages
+    */
+
+    for (
+        $i = $startPage;
+        $i <= $endPage;
+        $i++
+    ) {
+
+        $pageNumbers[] = $i;
+    }
+
+
+    /*
+    | Add dots before last page
+    */
+
+    if ($endPage < $totalPages - 1) {
+
+        $pageNumbers[] = '...';
+    }
+
+
+    /*
+    | Last page
+    */
+
+    $pageNumbers[] = $totalPages;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| HEADER
+|--------------------------------------------------------------------------
+*/
 
 require_once __DIR__ . '/includes/header.php';
+
 require_once __DIR__ . '/includes/slider.php';
+
 ?>
 
 
@@ -100,7 +407,12 @@ require_once __DIR__ . '/includes/slider.php';
 
     <div class="container">
 
-        <form class="search-panel" id="searchForm">
+        <form
+            class="search-panel"
+            id="searchForm"
+            method="GET"
+            action="/allhotels/index.php"
+        >
 
             <!-- SEARCH HOTEL -->
 
@@ -114,6 +426,7 @@ require_once __DIR__ . '/includes/slider.php';
                     type="text"
                     id="q"
                     name="q"
+                    value="<?= h($q) ?>"
                     placeholder="Hotel name or keyword"
                 >
 
@@ -141,6 +454,7 @@ require_once __DIR__ . '/includes/slider.php';
 
                         <option
                             value="<?= h($d['district']) ?>"
+                            <?= $district === $d['district'] ? 'selected' : '' ?>
                         >
                             <?= h($d['district']) ?>
                         </option>
@@ -173,6 +487,7 @@ require_once __DIR__ . '/includes/slider.php';
 
                         <option
                             value="<?= (int) $ft['id'] ?>"
+                            <?= $function_type === (int) $ft['id'] ? 'selected' : '' ?>
                         >
                             <?= h($ft['name']) ?>
                         </option>
@@ -184,7 +499,7 @@ require_once __DIR__ . '/includes/slider.php';
             </div>
 
 
-            <!-- GUESTS -->
+            <!-- GUEST CAPACITY -->
 
             <div class="search-field">
 
@@ -196,6 +511,7 @@ require_once __DIR__ . '/includes/slider.php';
                     type="number"
                     id="guests"
                     name="guests"
+                    value="<?= $guests > 0 ? $guests : '' ?>"
                     min="1"
                     placeholder="e.g. 150"
                 >
@@ -203,7 +519,7 @@ require_once __DIR__ . '/includes/slider.php';
             </div>
 
 
-            <!-- PRICE -->
+            <!-- MAX PRICE -->
 
             <div class="search-field">
 
@@ -215,13 +531,16 @@ require_once __DIR__ . '/includes/slider.php';
                     type="number"
                     id="max_price"
                     name="max_price"
+                    value="<?= $max_price > 0 ? $max_price : '' ?>"
                     min="0"
-                    step="1000"
+                    step="500"
                     placeholder="e.g. 50000"
                 >
 
             </div>
 
+
+            <!-- SEARCH BUTTON -->
 
             <button
                 type="submit"
@@ -235,7 +554,6 @@ require_once __DIR__ . '/includes/slider.php';
     </div>
 
 </section>
-
 
 
 <!-- ============================================================
@@ -269,28 +587,31 @@ require_once __DIR__ . '/includes/slider.php';
                 class="results-count"
                 id="resultsCount"
             >
-                <?= count($displayHotels) ?> hotel(s) found
+                <?= $totalHotels ?> hotel(s) found
             </span>
 
         </div>
 
 
-
-        <!-- HOTEL GRID -->
+        <!-- ========================================================
+             HOTEL GRID
+        ========================================================= -->
 
         <div
             class="hotel-grid"
             id="hotelGrid"
         >
 
-
             <?php if (empty($displayHotels)): ?>
 
 
                 <div class="empty-state">
 
-                    No hotels listed yet.
-                    Check back soon!
+                    No hotels found matching your search.
+
+                    <br>
+
+                    Try changing your search or filters.
 
                 </div>
 
@@ -330,31 +651,51 @@ require_once __DIR__ . '/includes/slider.php';
 
                             $imageUrl = '';
 
+
                             if (!empty($hotel['main_image'])) {
 
-                                $imagePath = trim($hotel['main_image']);
+                                $imagePath = trim(
+                                    $hotel['main_image']
+                                );
+
 
                                 /*
-                                | If database already contains /allhotels/
+                                | Database already contains /allhotels/
                                 */
 
-                                if (strpos($imagePath, '/allhotels/') === 0) {
+                                if (
+                                    strpos(
+                                        $imagePath,
+                                        '/allhotels/'
+                                    ) === 0
+                                ) {
 
                                     $imageUrl = $imagePath;
 
                                 }
+
 
                                 /*
                                 | Normal database value:
                                 | api/images/hotel_xxx.jpg
                                 */
 
-                                elseif (strpos($imagePath, 'api/images/') === 0) {
+                                elseif (
+                                    strpos(
+                                        $imagePath,
+                                        'api/images/'
+                                    ) === 0
+                                ) {
 
                                     $imageUrl =
-                                        '/allhotels/' . ltrim($imagePath, '/');
+                                        '/allhotels/' .
+                                        ltrim(
+                                            $imagePath,
+                                            '/'
+                                        );
 
                                 }
+
 
                                 /*
                                 | Other path
@@ -363,8 +704,11 @@ require_once __DIR__ . '/includes/slider.php';
                                 else {
 
                                     $imageUrl =
-                                        '/allhotels/' . ltrim($imagePath, '/');
-
+                                        '/allhotels/' .
+                                        ltrim(
+                                            $imagePath,
+                                            '/'
+                                        );
                                 }
 
                             }
@@ -412,7 +756,6 @@ require_once __DIR__ . '/includes/slider.php';
                         </div>
 
 
-
                         <!-- =================================================
                              HOTEL BODY
                         ================================================== -->
@@ -428,11 +771,12 @@ require_once __DIR__ . '/includes/slider.php';
                             <div class="addr">
 
                                 📍
+
                                 <?= h($hotel['address']) ?>,
+
                                 <?= h($hotel['district']) ?>
 
                             </div>
-
 
 
                             <!-- FUNCTION TAGS -->
@@ -452,19 +796,23 @@ require_once __DIR__ . '/includes/slider.php';
 
 
                                 <?php foreach (
-                                    array_slice($tags, 0, 3)
-                                    as $tag
+                                    array_slice(
+                                        $tags,
+                                        0,
+                                        3
+                                    ) as $tag
                                 ): ?>
 
                                     <span class="tag">
+
                                         <?= h(trim($tag)) ?>
+
                                     </span>
 
                                 <?php endforeach; ?>
 
 
                             </div>
-
 
 
                             <!-- PRICE + RATING -->
@@ -475,6 +823,7 @@ require_once __DIR__ . '/includes/slider.php';
                                 <span class="price">
 
                                     From Rs.
+
                                     <?= number_format(
                                         (float) $hotel['starting_price']
                                     ) ?>
@@ -487,6 +836,7 @@ require_once __DIR__ . '/includes/slider.php';
                                     <?= star_html(
                                         $hotel['avg_rating'] ?? 0
                                     ) ?>
+
 
                                     <?php if (
                                         !empty($hotel['avg_rating'])
@@ -507,7 +857,6 @@ require_once __DIR__ . '/includes/slider.php';
 
 
                             </div>
-
 
 
                             <!-- VIEW DETAILS -->
@@ -534,14 +883,111 @@ require_once __DIR__ . '/includes/slider.php';
 
         </div>
 
+
+        <!-- ========================================================
+             PAGINATION
+        ========================================================= -->
+
+        <?php if ($totalPages > 1): ?>
+
+            <nav
+                class="pagination"
+                aria-label="Hotel pagination"
+            >
+
+
+                <!-- PREVIOUS -->
+
+                <?php if ($currentPage > 1): ?>
+
+                    <a
+                        href="<?= h(pageUrl($currentPage - 1)) ?>"
+                        class="page-btn prev-next"
+                    >
+                        ‹ Prev
+                    </a>
+
+                <?php else: ?>
+
+                    <span class="page-btn disabled">
+                        ‹ Prev
+                    </span>
+
+                <?php endif; ?>
+
+
+                <!-- PAGE NUMBERS -->
+
+                <?php foreach ($pageNumbers as $page): ?>
+
+
+                    <?php if ($page === '...'): ?>
+
+                        <span class="page-dots">
+                            …
+                        </span>
+
+
+                    <?php else: ?>
+
+                        <a
+                            href="<?= h(pageUrl($page)) ?>"
+                            class="page-btn <?= (int) $page === $currentPage ? 'active' : '' ?>"
+                        >
+                            <?= $page ?>
+                        </a>
+
+                    <?php endif; ?>
+
+
+                <?php endforeach; ?>
+
+
+                <!-- NEXT -->
+
+                <?php if ($currentPage < $totalPages): ?>
+
+                    <a
+                        href="<?= h(pageUrl($currentPage + 1)) ?>"
+                        class="page-btn prev-next"
+                    >
+                        Next ›
+                    </a>
+
+                <?php else: ?>
+
+                    <span class="page-btn disabled">
+                        Next ›
+                    </span>
+
+                <?php endif; ?>
+
+
+            </nav>
+
+        <?php endif; ?>
+
+
     </div>
 
 </section>
 
 
-
 <?php
 
-$extra_scripts = ['/js/search.js'];
+/*
+|--------------------------------------------------------------------------
+| Do NOT load old client-side search.js
+|--------------------------------------------------------------------------
+|
+| Search and filtering are now handled by PHP + MySQL.
+|
+|--------------------------------------------------------------------------
+*/
+
+$extra_scripts = [];
 
 require_once __DIR__ . '/includes/footer.php';
+
+?>
+```
