@@ -984,10 +984,9 @@ require_once __DIR__ . '/includes/slider.php';
 |
 |--------------------------------------------------------------------------
 */
-
+require_once __DIR__ . '/includes/premium-popup.php';
 $extra_scripts = [];
 
 require_once __DIR__ . '/includes/footer.php';
 
 ?>
-```
