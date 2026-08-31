@@ -2,24 +2,20 @@
 
 /*
 |--------------------------------------------------------------------------
-| PREMIUM POPUP + PREMIUM ACTIVATION
+| PREMIUM POPUP
 |--------------------------------------------------------------------------
 |
 | File:
 | /allhotels/includes/premium-popup.php
 |
-| Requirements:
-| - config/db.php must already be loaded
-| - Session must already be started
-| - users table must contain:
-|      id
-|      role
+| This file:
+| - Detects logged-in hotel owners
+| - Finds their hotel
+| - Shows Premium popup for Free hotels
+| - Sends owner to existing payment gateway
 |
-| - hotels table must contain:
-|      id
-|      user_id
-|      name
-|      is_premium
+| PAYMENT PATH IS NOT CHANGED:
+| /allhotels/payment/premium-payment.php?hotel_id=...
 |
 |--------------------------------------------------------------------------
 */
@@ -27,7 +23,7 @@
 
 /*
 |--------------------------------------------------------------------------
-| SESSION
+| START SESSION
 |--------------------------------------------------------------------------
 */
 
@@ -46,14 +42,10 @@ $premiumPopupShow = false;
 
 $premiumHotel = null;
 
-$premiumMessage = '';
-
-$premiumError = '';
-
 
 /*
 |--------------------------------------------------------------------------
-| CURRENT USER
+| CURRENT USER ID
 |--------------------------------------------------------------------------
 */
 
@@ -70,7 +62,7 @@ if ($currentUserId > 0) {
 
     /*
     |--------------------------------------------------------------------------
-    | GET USER
+    | GET CURRENT USER
     |--------------------------------------------------------------------------
     */
 
@@ -95,7 +87,8 @@ if ($currentUserId > 0) {
     | CHECK HOTEL OWNER
     |--------------------------------------------------------------------------
     |
-    | Change 'hotel_owner' below if your actual role value is different.
+    | Your current role value is:
+    | owner
     |
     */
 
@@ -107,7 +100,7 @@ if ($currentUserId > 0) {
 
         /*
         |--------------------------------------------------------------------------
-        | GET OWNER'S HOTEL
+        | GET OWNER HOTEL
         |--------------------------------------------------------------------------
         */
 
@@ -126,197 +119,19 @@ if ($currentUserId > 0) {
             $currentUserId
         ]);
 
-        $premiumHotel = $hotelStmt->fetch(PDO::FETCH_ASSOC);
+        $premiumHotel =
+            $hotelStmt->fetch(PDO::FETCH_ASSOC);
 
 
         /*
         |--------------------------------------------------------------------------
-        | PREMIUM ACTIVATION
+        | SHOW POPUP ONLY FOR FREE HOTEL
         |--------------------------------------------------------------------------
-        */
-
-        if (
-            $_SERVER['REQUEST_METHOD'] === 'POST' &&
-            isset($_POST['activate_premium'])
-        ) {
-
-            /*
-            |--------------------------------------------------------------------------
-            | CSRF CHECK
-            |--------------------------------------------------------------------------
-            */
-
-            $csrfToken = $_POST['premium_csrf'] ?? '';
-
-            if (
-                empty($_SESSION['premium_csrf']) ||
-                !hash_equals(
-                    $_SESSION['premium_csrf'],
-                    $csrfToken
-                )
-            ) {
-
-                $premiumError =
-                    'Invalid request. Please try again.';
-
-            }
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | ACTIVATE PREMIUM
-            |--------------------------------------------------------------------------
-            */
-
-            elseif (!$premiumHotel) {
-
-                $premiumError =
-                    'No hotel was found for your account.';
-
-            }
-
-            elseif ((int) $premiumHotel['is_premium'] === 1) {
-
-                $premiumMessage =
-                    'Your hotel is already Premium.';
-
-            }
-
-            else {
-
-                try {
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | UPDATE HOTEL
-                    |--------------------------------------------------------------------------
-                    */
-
-                    $activateStmt = $pdo->prepare("
-                        UPDATE hotels
-                        SET is_premium = 1
-                        WHERE id = ?
-                          AND user_id = ?
-                          AND is_premium = 0
-                        LIMIT 1
-                    ");
-
-                    $activateStmt->execute([
-                        (int) $premiumHotel['id'],
-                        $currentUserId
-                    ]);
-
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | CHECK UPDATE
-                    |--------------------------------------------------------------------------
-                    */
-
-                    if ($activateStmt->rowCount() > 0) {
-
-                        $premiumMessage =
-                            'Premium has been activated successfully!';
-
-
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Update local hotel data
-                        |--------------------------------------------------------------------------
-                        */
-
-                        $premiumHotel['is_premium'] = 1;
-
-
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Do not show popup anymore
-                        |--------------------------------------------------------------------------
-                        */
-
-                        $premiumPopupShow = false;
-
-                    } else {
-
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Re-check database
-                        |--------------------------------------------------------------------------
-                        */
-
-                        $checkStmt = $pdo->prepare("
-                            SELECT
-                                id,
-                                name,
-                                is_premium
-                            FROM hotels
-                            WHERE id = ?
-                              AND user_id = ?
-                            LIMIT 1
-                        ");
-
-                        $checkStmt->execute([
-                            (int) $premiumHotel['id'],
-                            $currentUserId
-                        ]);
-
-                        $premiumHotel =
-                            $checkStmt->fetch(PDO::FETCH_ASSOC);
-
-
-                        if (
-                            $premiumHotel &&
-                            (int) $premiumHotel['is_premium'] === 1
-                        ) {
-
-                            $premiumMessage =
-                                'Premium has been activated successfully!';
-
-                            $premiumPopupShow = false;
-
-                        } else {
-
-                            $premiumError =
-                                'Premium activation failed. Please try again.';
-
-                        }
-
-                    }
-
-                } catch (PDOException $e) {
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Database Error
-                    |--------------------------------------------------------------------------
-                    */
-
-                    $premiumError =
-                        'Unable to activate Premium. Please try again later.';
-
-                }
-
-            }
-
-        }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | SHOW POPUP
-        |--------------------------------------------------------------------------
-        |
-        | Only show if:
-        | - Owner is logged in
-        | - Hotel exists
-        | - Hotel is NOT Premium
-        |
         */
 
         if (
             $premiumHotel &&
-            (int) $premiumHotel['is_premium'] === 0 &&
-            empty($premiumMessage)
+            (int) $premiumHotel['is_premium'] === 0
         ) {
 
             $premiumPopupShow = true;
@@ -327,30 +142,13 @@ if ($currentUserId > 0) {
 
 }
 
-
-/*
-|--------------------------------------------------------------------------
-| CREATE CSRF TOKEN
-|--------------------------------------------------------------------------
-*/
-
-if (
-    $premiumPopupShow &&
-    empty($_SESSION['premium_csrf'])
-) {
-
-    $_SESSION['premium_csrf'] =
-        bin2hex(random_bytes(32));
-
-}
-
 ?>
 
 
 <?php if ($premiumPopupShow): ?>
 
 <!-- ============================================================
-     PREMIUM POPUP
+     PREMIUM MODAL
 ============================================================ -->
 
 <div
@@ -358,128 +156,354 @@ if (
     id="premiumModal"
     role="dialog"
     aria-modal="true"
-    aria-labelledby="premiumModalTitle"
+    aria-labelledby="premiumTitle"
 >
 
 
-    <!-- BACKDROP -->
+    <!-- ========================================================
+         BACKDROP
+    ========================================================= -->
 
     <div
-        class="premium-modal-overlay"
-        id="premiumModalOverlay"
+        class="premium-backdrop"
+        id="premiumBackdrop"
     ></div>
 
 
-    <!-- MODAL -->
+    <!-- ========================================================
+         MODAL CARD
+    ========================================================= -->
 
-    <div class="premium-modal-box">
+    <div class="premium-card">
 
 
-        <!-- CLOSE BUTTON -->
+        <!-- ====================================================
+             CLOSE BUTTON
+        ===================================================== -->
 
         <button
             type="button"
             class="premium-close"
             id="premiumClose"
-            aria-label="Close"
+            aria-label="Close premium popup"
         >
-            &times;
+
+            <span></span>
+            <span></span>
+
         </button>
 
 
-        <!-- ICON -->
+        <!-- ====================================================
+             PREMIUM TOP AREA
+        ===================================================== -->
 
-        <div class="premium-icon">
+        <div class="premium-top">
 
-            ★
+
+            <!-- PREMIUM ICON -->
+
+            <div class="premium-icon-wrapper">
+
+                <div class="premium-icon">
+
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+
+                        <path
+                            d="M12 2L14.9 8.1L21.5 8.9L16.7 13.5L17.9 20L12 16.9L6.1 20L7.3 13.5L2.5 8.9L9.1 8.1L12 2Z"
+                            fill="currentColor"
+                        />
+
+                    </svg>
+
+                </div>
+
+            </div>
+
+
+            <!-- SMALL LABEL -->
+
+            <div class="premium-label">
+
+                PREMIUM UPGRADE
+
+            </div>
+
+
+            <!-- TITLE -->
+
+            <h2 id="premiumTitle">
+
+                Take Your Hotel
+                <span>to the Next Level</span>
+
+            </h2>
+
+
+            <!-- HOTEL NAME -->
+
+            <p class="premium-hotel-name">
+
+                <?= h($premiumHotel['name']) ?>
+
+            </p>
+
+
+            <!-- DESCRIPTION -->
+
+            <p class="premium-description">
+
+                Give your hotel more visibility, more features,
+                and a better experience for your customers.
+
+            </p>
 
         </div>
 
 
-        <!-- TITLE -->
+        <!-- ====================================================
+             BENEFITS
+        ===================================================== -->
 
-        <h2 id="premiumModalTitle">
-
-            Activate Premium
-
-        </h2>
+        <div class="premium-benefits">
 
 
-        <!-- HOTEL NAME -->
+            <!-- BENEFIT 01 -->
 
-        <p class="premium-hotel-name">
+            <div class="premium-benefit">
 
-            <?= h($premiumHotel['name']) ?>
+                <div class="benefit-icon">
 
-        </p>
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
 
+                        <path
+                            d="M12 3L19 6V11C19 15.5 16 19.3 12 21C8 19.3 5 15.5 5 11V6L12 3Z"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linejoin="round"
+                        />
 
-        <!-- DESCRIPTION -->
+                        <path
+                            d="M9 12L11 14L15 10"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        />
 
-        <p class="premium-description">
+                    </svg>
 
-            Your hotel is currently listed as a
-            <strong>Free Hotel</strong>.
+                </div>
 
-            Activate Premium to unlock more features
-            and give your hotel better visibility.
+                <div class="benefit-content">
 
-        </p>
+                    <strong>
+                        Premium Badge
+                    </strong>
 
+                    <span>
+                        Stand out from other hotels
+                    </span>
 
-        <!-- FEATURES -->
-
-        <div class="premium-features">
-
-
-            <div class="premium-feature">
-
-                <span class="feature-check">
-                    ✓
-                </span>
-
-                <span>
-                    Premium hotel badge
-                </span>
-
-            </div>
-
-
-            <div class="premium-feature">
-
-                <span class="feature-check">
-                    ✓
-                </span>
-
-                <span>
-                    Rich hotel gallery
-                </span>
+                </div>
 
             </div>
 
 
-            <div class="premium-feature">
+            <!-- BENEFIT 02 -->
 
-                <span class="feature-check">
-                    ✓
-                </span>
+            <div class="premium-benefit">
 
-                <span>
-                    Booking features
-                </span>
+                <div class="benefit-icon">
+
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+
+                        <rect
+                            x="3"
+                            y="4"
+                            width="18"
+                            height="16"
+                            rx="2"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                        />
+
+                        <circle
+                            cx="8"
+                            cy="9"
+                            r="1.5"
+                            fill="currentColor"
+                        />
+
+                        <path
+                            d="M3 16L8 12L12 15L15 12L21 17"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        />
+
+                    </svg>
+
+                </div>
+
+                <div class="benefit-content">
+
+                    <strong>
+                        Rich Hotel Gallery
+                    </strong>
+
+                    <span>
+                        Showcase your hotel beautifully
+                    </span>
+
+                </div>
 
             </div>
 
 
-            <div class="premium-feature">
+            <!-- BENEFIT 03 -->
 
-                <span class="feature-check">
-                    ✓
-                </span>
+            <div class="premium-benefit">
 
-                <span>
-                    Better visibility
-                </span>
+                <div class="benefit-icon">
+
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+
+                        <path
+                            d="M7 3V6"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                        />
+
+                        <path
+                            d="M17 3V6"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                        />
+
+                        <rect
+                            x="4"
+                            y="5"
+                            width="16"
+                            height="16"
+                            rx="2"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                        />
+
+                        <path
+                            d="M4 10H20"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                        />
+
+                        <path
+                            d="M8 14H12"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                        />
+
+                        <path
+                            d="M8 17H15"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                        />
+
+                    </svg>
+
+                </div>
+
+                <div class="benefit-content">
+
+                    <strong>
+                        Booking Features
+                    </strong>
+
+                    <span>
+                        Make it easier for guests to book
+                    </span>
+
+                </div>
+
+            </div>
+
+
+            <!-- BENEFIT 04 -->
+
+            <div class="premium-benefit">
+
+                <div class="benefit-icon">
+
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+
+                        <path
+                            d="M4 19V14"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                        />
+
+                        <path
+                            d="M10 19V10"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                        />
+
+                        <path
+                            d="M16 19V6"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                        />
+
+                        <path
+                            d="M22 19V3"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                        />
+
+                    </svg>
+
+                </div>
+
+                <div class="benefit-content">
+
+                    <strong>
+                        Better Visibility
+                    </strong>
+
+                    <span>
+                        Get noticed by more customers
+                    </span>
+
+                </div>
 
             </div>
 
@@ -487,60 +511,81 @@ if (
         </div>
 
 
-        <!-- ========================================================
-             ACTIVATION FORM
-        ========================================================= -->
+        <!-- ====================================================
+             ACTION AREA
+        ===================================================== -->
 
-        <form
-            method="POST"
-            action=""
-            id="premiumActivationForm"
-        >
+        <div class="premium-action">
 
 
-            <!-- CSRF -->
-
-            <input
-                type="hidden"
-                name="premium_csrf"
-                value="<?= h($_SESSION['premium_csrf']) ?>"
-            >
-
-
-            <!-- ACTION -->
-
-            <input
-                type="hidden"
-                name="activate_premium"
-                value="1"
-            >
-
-
-            <!-- ACTIVATE BUTTON -->
+            <!-- PAYMENT BUTTON -->
 
             <a
                 href="/allhotels/payment/premium-payment.php?hotel_id=<?= (int) $premiumHotel['id'] ?>"
-                class="premium-activate-btn"
+                class="premium-button"
             >
-                <span class="premium-star">★</span>
-                Activate Premium
+
+                <span>
+                    Activate Premium
+                </span>
+
+                <span class="premium-button-arrow">
+
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+
+                        <path
+                            d="M5 12H19"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                        />
+
+                        <path
+                            d="M13 6L19 12L13 18"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        />
+
+                    </svg>
+
+                </span>
+
             </a>
 
 
-        </form>
+            <!-- LATER -->
+
+            <button
+                type="button"
+                class="premium-later"
+                id="premiumLater"
+            >
+
+                Maybe later
+
+            </button>
 
 
-        <!-- LATER -->
+        </div>
 
-        <button
-            type="button"
-            class="premium-later-btn"
-            id="premiumLater"
-        >
 
-            Maybe Later
+        <!-- ====================================================
+             TRUST TEXT
+        ===================================================== -->
 
-        </button>
+        <div class="premium-trust">
+
+            <span class="trust-dot"></span>
+
+            Secure payment · Instant activation after payment
+
+        </div>
 
 
     </div>
@@ -553,6 +598,10 @@ if (
 ============================================================ -->
 
 <style>
+
+/* ============================================================
+   MODAL
+============================================================ */
 
 .premium-modal {
 
@@ -568,25 +617,54 @@ if (
 
     justify-content: center;
 
-    padding: 20px;
+    padding: 24px;
 
 }
 
 
-.premium-modal-overlay {
+/* ============================================================
+   BACKDROP
+============================================================ */
+
+.premium-backdrop {
 
     position: absolute;
 
     inset: 0;
 
-    background: rgba(0, 0, 0, 0.68);
+    background:
+        rgba(15, 23, 42, 0.72);
 
-    backdrop-filter: blur(6px);
+    backdrop-filter:
+        blur(8px);
+
+    -webkit-backdrop-filter:
+        blur(8px);
+
+    animation:
+        premiumBackdropIn 0.3s ease;
 
 }
 
 
-.premium-modal-box {
+@keyframes premiumBackdropIn {
+
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+
+}
+
+
+/* ============================================================
+   CARD
+============================================================ */
+
+.premium-card {
 
     position: relative;
 
@@ -594,36 +672,39 @@ if (
 
     width: 100%;
 
-    max-width: 480px;
+    max-width: 510px;
 
-    max-height: calc(100vh - 40px);
+    max-height: calc(100vh - 48px);
 
     overflow-y: auto;
 
     background: #ffffff;
 
-    border-radius: 22px;
+    border-radius: 26px;
 
-    padding: 34px 30px 28px;
+    padding: 34px 34px 26px;
 
     text-align: center;
 
     box-shadow:
-        0 30px 80px rgba(0, 0, 0, 0.28);
+        0 35px 90px
+        rgba(0, 0, 0, 0.30);
 
-    animation: premiumModalShow 0.35s ease;
+    animation:
+        premiumCardIn 0.4s
+        cubic-bezier(.22, 1, .36, 1);
 
 }
 
 
-@keyframes premiumModalShow {
+@keyframes premiumCardIn {
 
     from {
 
         opacity: 0;
 
         transform:
-            translateY(25px)
+            translateY(35px)
             scale(0.94);
 
     }
@@ -642,45 +723,87 @@ if (
 
 
 /* ============================================================
-   CLOSE
+   CLOSE BUTTON
 ============================================================ */
 
 .premium-close {
 
     position: absolute;
 
-    top: 12px;
+    top: 17px;
 
-    right: 15px;
+    right: 17px;
 
     width: 38px;
 
     height: 38px;
 
-    border: none;
+    padding: 0;
+
+    border: 0;
 
     border-radius: 50%;
 
-    background: transparent;
-
-    color: #777;
-
-    font-size: 30px;
-
-    line-height: 1;
+    background: #f5f6f8;
 
     cursor: pointer;
 
-    transition: 0.2s;
+    transition:
+        background 0.2s,
+        transform 0.2s;
 
 }
 
 
 .premium-close:hover {
 
-    background: #f2f2f2;
+    background: #e9ebef;
 
-    color: #222;
+    transform: rotate(90deg);
+
+}
+
+
+.premium-close span {
+
+    position: absolute;
+
+    left: 11px;
+
+    top: 18px;
+
+    width: 16px;
+
+    height: 2px;
+
+    border-radius: 2px;
+
+    background: #6b7280;
+
+}
+
+
+.premium-close span:first-child {
+
+    transform: rotate(45deg);
+
+}
+
+
+.premium-close span:last-child {
+
+    transform: rotate(-45deg);
+
+}
+
+
+/* ============================================================
+   TOP SECTION
+============================================================ */
+
+.premium-top {
+
+    padding: 4px 15px 22px;
 
 }
 
@@ -689,15 +812,22 @@ if (
    ICON
 ============================================================ */
 
+.premium-icon-wrapper {
+
+    display: flex;
+
+    justify-content: center;
+
+    margin-bottom: 16px;
+
+}
+
+
 .premium-icon {
 
-    width: 72px;
+    width: 70px;
 
-    height: 72px;
-
-    margin: 0 auto 18px;
-
-    border-radius: 50%;
+    height: 70px;
 
     display: flex;
 
@@ -705,11 +835,58 @@ if (
 
     justify-content: center;
 
-    background: #fff4d6;
+    border-radius: 20px;
 
-    color: #e7a000;
+    background:
+        linear-gradient(
+            145deg,
+            #fff7d6,
+            #ffe8a3
+        );
 
-    font-size: 35px;
+    color: #d99a00;
+
+    box-shadow:
+        0 10px 25px
+        rgba(217, 154, 0, 0.16);
+
+}
+
+
+.premium-icon svg {
+
+    width: 34px;
+
+    height: 34px;
+
+}
+
+
+/* ============================================================
+   LABEL
+============================================================ */
+
+.premium-label {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    padding: 6px 11px;
+
+    border-radius: 50px;
+
+    background: #fff7df;
+
+    color: #b77900;
+
+    font-size: 10px;
+
+    font-weight: 800;
+
+    letter-spacing: 1.2px;
 
 }
 
@@ -718,30 +895,45 @@ if (
    TITLE
 ============================================================ */
 
-.premium-modal-box h2 {
+.premium-card h2 {
 
-    margin: 0;
+    margin: 13px 0 7px;
 
-    color: #222;
+    color: #111827;
 
-    font-size: 28px;
+    font-size: 29px;
 
-    font-weight: 750;
+    line-height: 1.18;
 
-    line-height: 1.2;
+    font-weight: 800;
+
+    letter-spacing: -0.7px;
 
 }
 
 
+.premium-card h2 span {
+
+    display: block;
+
+    color: #c78b00;
+
+}
+
+
+/* ============================================================
+   HOTEL NAME
+============================================================ */
+
 .premium-hotel-name {
 
-    margin: 8px 0 16px;
+    margin: 0 0 12px;
 
-    color: #555;
+    color: #374151;
 
-    font-size: 17px;
+    font-size: 16px;
 
-    font-weight: 600;
+    font-weight: 700;
 
 }
 
@@ -752,94 +944,72 @@ if (
 
 .premium-description {
 
-    max-width: 400px;
+    max-width: 390px;
 
-    margin: 0 auto 22px;
+    margin: 0 auto;
 
-    color: #666;
+    color: #6b7280;
 
-    font-size: 15px;
+    font-size: 14px;
 
     line-height: 1.65;
 
 }
 
 
-.premium-description strong {
-
-    color: #333;
-
-}
-
-
 /* ============================================================
-   FEATURES
+   BENEFITS
 ============================================================ */
 
-.premium-features {
+.premium-benefits {
 
-    margin-bottom: 24px;
+    display: grid;
 
-    padding: 15px 18px;
+    grid-template-columns: 1fr 1fr;
 
-    border-radius: 14px;
+    gap: 10px;
 
-    background: #f7f8fa;
+    padding: 18px;
+
+    border-radius: 18px;
+
+    background: #f8fafc;
+
+    border: 1px solid #eef0f3;
 
     text-align: left;
 
 }
 
 
-.premium-feature {
+/* ============================================================
+   BENEFIT
+============================================================ */
+
+.premium-benefit {
 
     display: flex;
 
-    align-items: center;
+    align-items: flex-start;
 
     gap: 10px;
 
-    padding: 7px 0;
-
-    color: #333;
-
-    font-size: 15px;
-
-}
-
-
-.feature-check {
-
-    display: inline-flex;
-
-    align-items: center;
-
-    justify-content: center;
-
-    width: 21px;
-
-    height: 21px;
-
-    flex: 0 0 21px;
-
-    border-radius: 50%;
-
-    background: #e7f7ed;
-
-    color: #168344;
-
-    font-size: 13px;
-
-    font-weight: 700;
+    padding: 9px 5px;
 
 }
 
 
 /* ============================================================
-   ACTIVATE BUTTON
+   BENEFIT ICON
 ============================================================ */
 
-.premium-activate-btn {
+.benefit-icon {
+
+    width: 35px;
+
+    height: 35px;
+
+    flex: 0 0 35px;
 
     display: flex;
 
@@ -847,92 +1017,244 @@ if (
 
     justify-content: center;
 
-    gap: 8px;
+    border-radius: 10px;
+
+    background: #ffffff;
+
+    color: #c58b00;
+
+    border: 1px solid #eee5ca;
+
+}
+
+
+.benefit-icon svg {
+
+    width: 19px;
+
+    height: 19px;
+
+}
+
+
+/* ============================================================
+   BENEFIT TEXT
+============================================================ */
+
+.benefit-content {
+
+    min-width: 0;
+
+}
+
+
+.benefit-content strong {
+
+    display: block;
+
+    margin-bottom: 2px;
+
+    color: #1f2937;
+
+    font-size: 12px;
+
+    font-weight: 750;
+
+}
+
+
+.benefit-content span {
+
+    display: block;
+
+    color: #7b8492;
+
+    font-size: 10px;
+
+    line-height: 1.35;
+
+}
+
+
+/* ============================================================
+   ACTION
+============================================================ */
+
+.premium-action {
+
+    padding-top: 22px;
+
+}
+
+
+/* ============================================================
+   PREMIUM BUTTON
+============================================================ */
+
+.premium-button {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 12px;
 
     width: 100%;
 
-    min-height: 50px;
+    min-height: 52px;
 
-    padding: 13px 20px;
+    padding: 14px 20px;
 
-    border: none;
+    border-radius: 13px;
 
-    border-radius: 11px;
-
-    background: #111827;
+    background:
+        linear-gradient(
+            135deg,
+            #171717,
+            #303030
+        );
 
     color: #ffffff;
 
+    text-decoration: none;
+
     font-size: 15px;
 
-    font-weight: 700;
+    font-weight: 750;
+
+    box-shadow:
+        0 10px 24px
+        rgba(0, 0, 0, 0.17);
+
+    transition:
+        transform 0.2s,
+        box-shadow 0.2s,
+        background 0.2s;
+
+}
+
+
+.premium-button:hover {
+
+    color: #ffffff;
+
+    transform:
+        translateY(-2px);
+
+    box-shadow:
+        0 14px 30px
+        rgba(0, 0, 0, 0.22);
+
+    background:
+        linear-gradient(
+            135deg,
+            #0b0b0b,
+            #252525
+        );
+
+}
+
+
+/* ============================================================
+   ARROW
+============================================================ */
+
+.premium-button-arrow {
+
+    width: 27px;
+
+    height: 27px;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    border-radius: 50%;
+
+    background:
+        rgba(255,255,255,0.12);
+
+}
+
+
+.premium-button-arrow svg {
+
+    width: 15px;
+
+    height: 15px;
+
+}
+
+
+/* ============================================================
+   MAYBE LATER
+============================================================ */
+
+.premium-later {
+
+    margin-top: 9px;
+
+    padding: 8px 14px;
+
+    border: 0;
+
+    background: transparent;
+
+    color: #8a919c;
+
+    font-size: 13px;
 
     cursor: pointer;
 
     transition:
-        transform 0.2s,
-        background 0.2s,
-        box-shadow 0.2s;
+        color 0.2s;
 
 }
 
 
-.premium-activate-btn:hover {
+.premium-later:hover {
 
-    background: #000000;
-
-    transform: translateY(-1px);
-
-    box-shadow:
-        0 8px 20px rgba(0, 0, 0, 0.18);
-
-}
-
-
-.premium-activate-btn:active {
-
-    transform: translateY(0);
-
-}
-
-
-.premium-star {
-
-    font-size: 17px;
+    color: #374151;
 
 }
 
 
 /* ============================================================
-   LATER BUTTON
+   TRUST
 ============================================================ */
 
-.premium-later-btn {
+.premium-trust {
 
-    width: 100%;
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 7px;
 
     margin-top: 9px;
 
-    padding: 11px;
+    color: #9ca3af;
 
-    border: none;
-
-    background: transparent;
-
-    color: #777;
-
-    font-size: 14px;
-
-    cursor: pointer;
-
-    transition: 0.2s;
+    font-size: 10px;
 
 }
 
 
-.premium-later-btn:hover {
+.trust-dot {
 
-    color: #222;
+    width: 6px;
+
+    height: 6px;
+
+    border-radius: 50%;
+
+    background: #34a853;
 
 }
 
@@ -941,64 +1263,196 @@ if (
    MOBILE
 ============================================================ */
 
-@media (max-width: 500px) {
+@media (max-width: 600px) {
 
     .premium-modal {
 
-        padding: 15px;
+        padding: 14px;
 
     }
 
 
-    .premium-modal-box {
+    .premium-card {
 
-        max-height: calc(100vh - 30px);
+        max-height:
+            calc(100vh - 28px);
 
         padding:
-            30px
-            20px
-            22px;
+            27px
+            18px
+            20px;
 
-        border-radius: 18px;
+        border-radius: 21px;
+
+    }
+
+
+    .premium-close {
+
+        top: 12px;
+
+        right: 12px;
+
+        width: 34px;
+
+        height: 34px;
+
+    }
+
+
+    .premium-close span {
+
+        left: 9px;
+
+        top: 16px;
+
+        width: 15px;
+
+    }
+
+
+    .premium-top {
+
+        padding:
+            3px
+            8px
+            17px;
 
     }
 
 
     .premium-icon {
 
-        width: 62px;
+        width: 60px;
 
-        height: 62px;
+        height: 60px;
 
-        font-size: 30px;
+        border-radius: 17px;
 
     }
 
 
-    .premium-modal-box h2 {
+    .premium-icon svg {
+
+        width: 29px;
+
+        height: 29px;
+
+    }
+
+
+    .premium-label {
+
+        font-size: 9px;
+
+        padding: 5px 9px;
+
+    }
+
+
+    .premium-card h2 {
 
         font-size: 24px;
+
+        letter-spacing: -0.4px;
 
     }
 
 
     .premium-hotel-name {
 
-        font-size: 16px;
+        font-size: 15px;
 
     }
 
 
     .premium-description {
 
+        font-size: 13px;
+
+    }
+
+
+    .premium-benefits {
+
+        grid-template-columns: 1fr;
+
+        gap: 2px;
+
+        padding: 12px;
+
+    }
+
+
+    .premium-benefit {
+
+        padding: 8px 4px;
+
+    }
+
+
+    .benefit-content strong {
+
+        font-size: 12px;
+
+    }
+
+
+    .benefit-content span {
+
+        font-size: 10px;
+
+    }
+
+
+    .premium-action {
+
+        padding-top: 17px;
+
+    }
+
+
+    .premium-button {
+
+        min-height: 49px;
+
         font-size: 14px;
 
     }
 
 
-    .premium-feature {
+    .premium-trust {
 
-        font-size: 14px;
+        font-size: 9px;
+
+    }
+
+}
+
+
+/* ============================================================
+   VERY SMALL DEVICES
+============================================================ */
+
+@media (max-width: 370px) {
+
+    .premium-card h2 {
+
+        font-size: 22px;
+
+    }
+
+
+    .premium-description {
+
+        font-size: 12px;
+
+    }
+
+
+    .premium-benefits {
+
+        padding: 9px;
 
     }
 
@@ -1036,21 +1490,9 @@ document.addEventListener(
             );
 
 
-        const overlay =
+        const backdrop =
             document.getElementById(
-                'premiumModalOverlay'
-            );
-
-
-        const activationForm =
-            document.getElementById(
-                'premiumActivationForm'
-            );
-
-
-        const activateButton =
-            document.getElementById(
-                'premiumActivateBtn'
+                'premiumBackdrop'
             );
 
 
@@ -1067,14 +1509,23 @@ document.addEventListener(
             }
 
 
-            modal.style.display = 'none';
+            modal.classList.add(
+                'premium-closing'
+            );
 
 
-            /*
-            | Allow body scrolling again
-            */
+            setTimeout(
+                function () {
 
-            document.body.style.overflow = '';
+                    modal.style.display =
+                        'none';
+
+                    document.body.style.overflow =
+                        '';
+
+                },
+                180
+            );
 
         }
 
@@ -1113,13 +1564,13 @@ document.addEventListener(
 
         /*
         |--------------------------------------------------------------------------
-        | CLICK OUTSIDE
+        | CLICK BACKDROP
         |--------------------------------------------------------------------------
         */
 
-        if (overlay) {
+        if (backdrop) {
 
-            overlay.addEventListener(
+            backdrop.addEventListener(
                 'click',
                 closePremiumModal
             );
@@ -1129,7 +1580,7 @@ document.addEventListener(
 
         /*
         |--------------------------------------------------------------------------
-        | ESC KEY
+        | ESCAPE KEY
         |--------------------------------------------------------------------------
         */
 
@@ -1153,35 +1604,7 @@ document.addEventListener(
 
         /*
         |--------------------------------------------------------------------------
-        | PREVENT DOUBLE CLICK
-        |--------------------------------------------------------------------------
-        */
-
-        if (activationForm) {
-
-            activationForm.addEventListener(
-                'submit',
-                function () {
-
-                    if (activateButton) {
-
-                        activateButton.disabled =
-                            true;
-
-                        activateButton.innerHTML =
-                            'Activating Premium...';
-
-                    }
-
-                }
-            );
-
-        }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | STOP BODY SCROLLING
+        | DISABLE BODY SCROLL
         |--------------------------------------------------------------------------
         */
 
@@ -1192,194 +1615,47 @@ document.addEventListener(
 
         }
 
+
     }
 );
 
 </script>
 
 
-<?php endif; ?>
+<style>
 
-
-<?php
 /*
 |--------------------------------------------------------------------------
-| PREMIUM SUCCESS MESSAGE
+| CLOSE ANIMATION
 |--------------------------------------------------------------------------
 */
 
-if (!empty($premiumMessage)):
-?>
+.premium-modal.premium-closing
+.premium-backdrop {
 
-<div
-    class="premium-success-message"
-    id="premiumSuccessMessage"
->
+    opacity: 0;
 
-    <div class="premium-success-icon">
-        ✓
-    </div>
-
-    <div>
-
-        <strong>
-            Premium Activated!
-        </strong>
-
-        <p>
-            <?= h($premiumMessage) ?>
-        </p>
-
-    </div>
-
-</div>
-
-
-<style>
-
-.premium-success-message {
-
-    position: fixed;
-
-    right: 25px;
-
-    bottom: 25px;
-
-    z-index: 999999;
-
-    display: flex;
-
-    align-items: center;
-
-    gap: 12px;
-
-    max-width: 380px;
-
-    padding: 15px 18px;
-
-    border-radius: 13px;
-
-    background: #ffffff;
-
-    box-shadow:
-        0 12px 35px rgba(0, 0, 0, 0.18);
-
-    border-left: 4px solid #168344;
-
-    animation: premiumSuccessShow 0.35s ease;
+    transition:
+        opacity 0.18s ease;
 
 }
 
 
-@keyframes premiumSuccessShow {
+.premium-modal.premium-closing
+.premium-card {
 
-    from {
+    opacity: 0;
 
-        opacity: 0;
+    transform:
+        translateY(15px)
+        scale(0.97);
 
-        transform: translateY(15px);
-
-    }
-
-    to {
-
-        opacity: 1;
-
-        transform: translateY(0);
-
-    }
-
-}
-
-
-.premium-success-icon {
-
-    width: 34px;
-
-    height: 34px;
-
-    flex: 0 0 34px;
-
-    border-radius: 50%;
-
-    display: flex;
-
-    align-items: center;
-
-    justify-content: center;
-
-    background: #e7f7ed;
-
-    color: #168344;
-
-    font-weight: 700;
-
-}
-
-
-.premium-success-message strong {
-
-    color: #222;
-
-}
-
-
-.premium-success-message p {
-
-    margin: 3px 0 0;
-
-    color: #666;
-
-    font-size: 13px;
-
-}
-
-
-@media (max-width: 600px) {
-
-    .premium-success-message {
-
-        left: 15px;
-
-        right: 15px;
-
-        bottom: 15px;
-
-        max-width: none;
-
-    }
+    transition:
+        opacity 0.18s ease,
+        transform 0.18s ease;
 
 }
 
 </style>
-
-
-<script>
-
-setTimeout(function () {
-
-    const message =
-        document.getElementById(
-            'premiumSuccessMessage'
-        );
-
-    if (message) {
-
-        message.style.opacity = '0';
-
-        message.style.transform =
-            'translateY(10px)';
-
-        setTimeout(function () {
-
-            message.remove();
-
-        }, 300);
-
-    }
-
-}, 4000);
-
-</script>
 
 <?php endif; ?>
