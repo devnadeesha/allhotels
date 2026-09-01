@@ -112,19 +112,55 @@ $imagesStmt->execute([$id]);
 
 $images = $imagesStmt->fetchAll(PDO::FETCH_ASSOC);
 
+
+/*
+|--------------------------------------------------------------------------
+| Create Correct Image URLs
+|--------------------------------------------------------------------------
+*/
+
+foreach ($images as &$img) {
+
+    $img['image_url'] =
+        '/allhotels/' . ltrim($img['image_path'], '/');
+
+}
+
+unset($img);
+
+
+/*
+|--------------------------------------------------------------------------
+| Get Main Image
+|--------------------------------------------------------------------------
+*/
+
 $mainImage = null;
 
 foreach ($images as $img) {
+
     if ((int) $img['is_main'] === 1) {
+
         $mainImage = $img;
+
         break;
+
     }
+
 }
+
+
+/*
+|--------------------------------------------------------------------------
+| Fallback Main Image
+|--------------------------------------------------------------------------
+*/
 
 if (!$mainImage && !empty($images)) {
-    $mainImage = $images[0];
-}
 
+    $mainImage = $images[0];
+
+}
 
 /*
 |--------------------------------------------------------------------------
@@ -221,66 +257,185 @@ require_once __DIR__ . '/../includes/header.php';
     <?php endif; ?>
 
 
-    <!-- HOTEL HERO IMAGE -->
+    <!-- =========================================================
+         HOTEL IMAGE GALLERY
+         ========================================================= -->
 
-    <div class="details-hero">
+    <?php if (!empty($images) && $mainImage): ?>
 
-        <?php if ($mainImage): ?>
+        <div class="hotel-gallery">
+
+            <!-- MAIN IMAGE -->
+
+            <div class="gallery-main">
+
+                <img
+                    id="mainHotelImage"
+                    src="<?= h($mainImage['image_url']) ?>"
+                    alt="<?= h($hotel['name']) ?>"
+                >
+
+
+                <?php if (count($images) > 1): ?>
+
+                    <!-- PREVIOUS -->
+
+                    <button
+                        type="button"
+                        class="gallery-arrow gallery-prev"
+                        aria-label="Previous image"
+                    >
+                        ❮
+                    </button>
+
+
+                    <!-- NEXT -->
+
+                    <button
+                        type="button"
+                        class="gallery-arrow gallery-next"
+                        aria-label="Next image"
+                    >
+                        ❯
+                    </button>
+
+                <?php endif; ?>
+
+
+                <!-- PREMIUM BADGE -->
+
+                <?php if ((int) ($hotel['is_premium'] ?? 0) === 1): ?>
+
+                    <div class="premium-badge">
+                        ★ Premium Listed
+                    </div>
+
+                <?php endif; ?>
+
+            </div>
+
+
+            <!-- =================================================
+                 THUMBNAILS
+                 ================================================= -->
+
+            <?php if (count($images) > 1): ?>
+
+                <div class="gallery-thumbnails">
+
+                    <?php foreach ($images as $index => $img): ?>
+
+                        <img
+                            src="<?= h($img['image_url']) ?>"
+                            alt="<?= h($hotel['name']) ?> Gallery <?= $index + 1 ?>"
+                            class="gallery-thumbnail <?= $img['image_path'] === $mainImage['image_path'] ? 'active' : '' ?>"
+                            data-image="<?= h($img['image_url']) ?>"
+                        >
+
+                    <?php endforeach; ?>
+
+                </div>
+
+            <?php endif; ?>
+
+        </div>
+
+
+        <!-- =====================================================
+             LARGE IMAGE LIGHTBOX
+             ===================================================== -->
+
+        <div
+            id="galleryLightbox"
+            class="gallery-lightbox"
+        >
+
+            <!-- CLOSE -->
+
+            <button
+                type="button"
+                class="lightbox-close"
+                aria-label="Close gallery"
+            >
+                ×
+            </button>
+
+
+            <?php if (count($images) > 1): ?>
+
+                <!-- PREVIOUS -->
+
+                <button
+                    type="button"
+                    class="lightbox-arrow lightbox-prev"
+                    aria-label="Previous image"
+                >
+                    ❮
+                </button>
+
+            <?php endif; ?>
+
+
+            <!-- LARGE IMAGE -->
 
             <img
-                id="mainHotelImage"
-                src="/<?= h($mainImage['image_path']) ?>"
+                id="lightboxImage"
+                src=""
                 alt="<?= h($hotel['name']) ?>"
             >
 
-        <?php else: ?>
+
+            <?php if (count($images) > 1): ?>
+
+                <!-- NEXT -->
+
+                <button
+                    type="button"
+                    class="lightbox-arrow lightbox-next"
+                    aria-label="Next image"
+                >
+                    ❯
+                </button>
+
+            <?php endif; ?>
+
+        </div>
+
+    <?php else: ?>
+
+        <!-- NO IMAGE -->
+
+        <div class="details-hero">
 
             <div class="hotel-no-image">
                 <?= h($hotel['name']) ?>
             </div>
 
-        <?php endif; ?>
+            <?php if ((int) ($hotel['is_premium'] ?? 0) === 1): ?>
 
-
-        <?php if ((int) ($hotel['is_premium'] ?? 0) === 1): ?>
-
-            <div
-                class="premium-badge"
-                style="top:20px;left:20px;"
-            >
-                ★ Premium Listed
-            </div>
-
-        <?php endif; ?>
-
-    </div>
-
-
-    <!-- IMAGE GALLERY -->
-
-    <?php if (count($images) > 1): ?>
-
-        <div class="gallery-strip">
-
-            <?php foreach ($images as $img): ?>
-
-                <img
-                    src="/<?= h($img['image_path']) ?>"
-                    alt="<?= h($hotel['name']) ?> Gallery"
+                <div
+                    class="premium-badge"
+                    style="top:20px;left:20px;"
                 >
+                    ★ Premium Listed
+                </div>
 
-            <?php endforeach; ?>
+            <?php endif; ?>
 
         </div>
 
     <?php endif; ?>
 
 
-    <!-- DETAILS LAYOUT -->
+    <!-- =========================================================
+         DETAILS LAYOUT
+         ========================================================= -->
 
     <div class="details-layout">
 
-        <!-- LEFT -->
+        <!-- =====================================================
+             LEFT
+             ===================================================== -->
 
         <div>
 
@@ -321,11 +476,15 @@ require_once __DIR__ . '/../includes/header.php';
                     </div>
 
                     <div>
+
                         <?= h($hotel['address'] ?? '') ?>
 
                         <?php if (!empty($hotel['district'])): ?>
+
                             , <?= h($hotel['district']) ?>
+
                         <?php endif; ?>
+
                     </div>
 
                 </div>
@@ -340,10 +499,12 @@ require_once __DIR__ . '/../includes/header.php';
                     </div>
 
                     <div>
+
                         <?= h(
                             $hotel['contact_number']
                             ?? 'Not provided'
                         ) ?>
+
                     </div>
 
                 </div>
@@ -358,10 +519,13 @@ require_once __DIR__ . '/../includes/header.php';
                     </div>
 
                     <div>
+
                         Starting from Rs.
+
                         <?= number_format(
                             (float) ($hotel['starting_price'] ?? 0)
                         ) ?>
+
                     </div>
 
                 </div>
@@ -379,7 +543,9 @@ require_once __DIR__ . '/../includes/header.php';
 
                         <div>
 
-                            <?= (int) ($hotel['min_guests'] ?? 1) ?>
+                            <?= (int) (
+                                $hotel['min_guests'] ?? 1
+                            ) ?>
 
                             –
 
@@ -403,9 +569,11 @@ require_once __DIR__ . '/../includes/header.php';
                     </div>
 
                     <div>
+
                         <?= nl2br(
                             h($hotel['description'] ?? '')
                         ) ?>
+
                     </div>
 
                 </div>
@@ -430,9 +598,11 @@ require_once __DIR__ . '/../includes/header.php';
                     <div>
 
                         <div class="stars">
+
                             <?= star_html(
                                 $avg['avg_rating'] ?? 0
                             ) ?>
+
                         </div>
 
                         <div class="footer-note">
@@ -452,7 +622,9 @@ require_once __DIR__ . '/../includes/header.php';
             </div>
 
 
-            <!-- CUSTOMER REVIEWS -->
+            <!-- =================================================
+                 CUSTOMER REVIEWS
+                 ================================================= -->
 
             <div class="info-card">
 
@@ -513,6 +685,7 @@ require_once __DIR__ . '/../includes/header.php';
                                     <span class="date">
 
                                         —
+
                                         <?= date(
                                             'd M Y',
                                             strtotime(
@@ -643,60 +816,75 @@ require_once __DIR__ . '/../includes/header.php';
         </div>
 
 
-        <!-- RIGHT -->
+        <!-- =====================================================
+             RIGHT
+             ===================================================== -->
 
         <div>
 
             <!-- BOOKING CARD -->
 
-                <div class="sidebar-card">
+            <div class="sidebar-card">
 
-                    <h3>Booking</h3>
+                <h3>
+                    Booking
+                </h3>
 
-                    <div class="price-line">
-                        Rs.
-                        <?= number_format(
-                            (float) ($hotel['starting_price'] ?? 0)
-                        ) ?>
-                    </div>
 
-                    <p class="footer-note">
-                        Starting price — final cost depends on
-                        function type and guest count.
-                    </p>
+                <div class="price-line">
 
-                    <?php if ((int) ($hotel['is_premium'] ?? 0) === 1): ?>
+                    Rs.
 
-                        <a
-                            href="/allhotels/api/book-hotel.php?hotel_id=<?= (int) $hotel['id'] ?>"
-                            class="btn btn-terracotta btn-block"
-                        >
-                            Book Now
-                        </a>
-
-                        <p class="footer-note" style="margin-top:10px;">
-                            Online booking is available for this Premium hotel.
-                        </p>
-
-                    <?php else: ?>
-
-                        <div class="locked-feature">
-
-                            🔒 Online booking is available
-                            on Premium listings.
-
-                            <br><br>
-
-                            Contact the hotel directly using
-                            the number above.
-
-                        </div>
-
-                    <?php endif; ?>
+                    <?= number_format(
+                        (float) ($hotel['starting_price'] ?? 0)
+                    ) ?>
 
                 </div>
 
-            
+
+                <p class="footer-note">
+
+                    Starting price — final cost depends on
+                    function type and guest count.
+
+                </p>
+
+
+                <?php if ((int) ($hotel['is_premium'] ?? 0) === 1): ?>
+
+                    <a
+                        href="/allhotels/api/book-hotel.php?hotel_id=<?= (int) $hotel['id'] ?>"
+                        class="btn btn-terracotta btn-block"
+                    >
+                        Book Now
+                    </a>
+
+
+                    <p
+                        class="footer-note"
+                        style="margin-top:10px;"
+                    >
+                        Online booking is available for this
+                        Premium hotel.
+                    </p>
+
+                <?php else: ?>
+
+                    <div class="locked-feature">
+
+                        🔒 Online booking is available
+                        on Premium listings.
+
+                        <br><br>
+
+                        Contact the hotel directly using
+                        the number above.
+
+                    </div>
+
+                <?php endif; ?>
+
+            </div>
 
         </div>
 

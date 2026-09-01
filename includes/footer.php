@@ -211,9 +211,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
 });
 
+
 </script>
+
+<!-- HOTEL GALLERY -->
+
+<script src="/allhotels/js/gallery.js"></script>
 
 
 </body>
 </html>
-
