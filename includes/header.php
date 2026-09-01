@@ -20,6 +20,13 @@ $user = current_user();
         ?>
     </title>
 
+    <!-- Favicon / Website Logo -->
+    <link
+        rel="icon"
+        type="image/png"
+        href="/allhotels/api/images/logo-white.png"
+    >
+
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
 
@@ -28,11 +35,12 @@ $user = current_user();
         rel="stylesheet">
 
     <!-- Main CSS -->
-    <link rel="stylesheet" href="/allhotels/css/style.css">
-    
+    <link
+        rel="stylesheet"
+        href="/allhotels/css/style.css"
+    >
 
 </head>
-
 <body>
 
 <!-- ==========================================================
