@@ -8,212 +8,430 @@ require_once __DIR__ . '/../PHPMailer/src/Exception.php';
 require_once __DIR__ . '/../PHPMailer/src/PHPMailer.php';
 require_once __DIR__ . '/../PHPMailer/src/SMTP.php';
 
+// Mail configuration
 require_once __DIR__ . '/../config/mail.php';
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 
 
-// Get email from session
-$email = $_SESSION['verify_email'] ?? '';
+/*
+|--------------------------------------------------------------------------
+| GET EMAIL FROM SESSION
+|--------------------------------------------------------------------------
+*/
+
+$email =
+    $_SESSION['verify_email']
+    ?? '';
 
 
-// If email is not available
+/*
+|--------------------------------------------------------------------------
+| EMAIL NOT AVAILABLE
+|--------------------------------------------------------------------------
+*/
+
 if ($email === '') {
-    redirect('../register/register.php');
+
+    redirect(
+        '../register/register.php'
+    );
 }
 
 
-// Find user
-$stmt = $pdo->prepare(
-    "SELECT id, full_name, email, is_verified
-     FROM users
-     WHERE email = ?"
-);
+/*
+|--------------------------------------------------------------------------
+| FIND PENDING REGISTRATION
+|--------------------------------------------------------------------------
+*/
 
-$stmt->execute([$email]);
+$stmt =
+    $pdo->prepare(
+        "SELECT
+            id,
+            full_name,
+            email,
+            otp_code,
+            otp_expires_at
+         FROM pending_registrations
+         WHERE email = ?
+         LIMIT 1"
+    );
 
-$user = $stmt->fetch();
+
+$stmt->execute([
+    $email
+]);
 
 
-if (!$user) {
+$pending =
+    $stmt->fetch(
+        PDO::FETCH_ASSOC
+    );
+
+
+/*
+|--------------------------------------------------------------------------
+| PENDING REGISTRATION NOT FOUND
+|--------------------------------------------------------------------------
+*/
+
+if (!$pending) {
+
+    unset(
+        $_SESSION['verify_email'],
+        $_SESSION['verify_otp_sent_at'],
+        $_SESSION['verify_otp_expires_at']
+    );
+
 
     $_SESSION['flash_error'] =
-        'Account not found. Please register again.';
+        'Registration session not found. Please register again.';
 
-    redirect('../register/register.php');
+
+    redirect(
+        '../register/register.php'
+    );
 }
 
 
-// Already verified
-if ((int)$user['is_verified'] === 1) {
+/*
+|--------------------------------------------------------------------------
+| RESEND COOLDOWN - 60 SECONDS
+|--------------------------------------------------------------------------
+*/
 
-    unset($_SESSION['verify_email']);
+$lastSent =
+    (int) (
+        $_SESSION['verify_otp_sent_at']
+        ?? 0
+    );
 
-    $_SESSION['flash_login'] =
-        'Your email is already verified. Please log in.';
 
-    redirect('../auth/login.php');
+if ($lastSent > 0) {
+
+    $secondsPassed =
+        time() - $lastSent;
+
+
+    if ($secondsPassed < 60) {
+
+        $wait =
+            60 - $secondsPassed;
+
+
+        $_SESSION['flash_otp_error'] =
+            'Please wait '
+            . $wait
+            . ' seconds before requesting another OTP.';
+
+
+        redirect(
+            '../auth/verify-otp.php'
+        );
+    }
 }
 
+
+/*
+|--------------------------------------------------------------------------
+| GENERATE NEW OTP
+|--------------------------------------------------------------------------
+*/
 
 try {
 
-    /*
-     * Generate new 6-digit OTP
-     */
-
-    $otp = str_pad(
-        (string) random_int(0, 999999),
-        6,
-        '0',
-        STR_PAD_LEFT
-    );
-
-
-    /*
-     * OTP expires after 5 minutes
-     */
-
-    $otpExpires = date(
-        'Y-m-d H:i:s',
-        time() + (5 * 60)
-    );
+    $otp =
+        str_pad(
+            (string) random_int(
+                0,
+                999999
+            ),
+            6,
+            '0',
+            STR_PAD_LEFT
+        );
 
 
     /*
-     * Save new OTP
-     */
+    |--------------------------------------------------------------------------
+    | NEW OTP EXPIRY - 5 MINUTES
+    |--------------------------------------------------------------------------
+    */
 
-    $update = $pdo->prepare(
-        "UPDATE users
-         SET
-            otp_code = ?,
-            otp_expires_at = ?
-         WHERE id = ?"
-    );
+    $otpExpiresTimestamp =
+        time() + 300;
+
+
+    $otpExpires =
+        date(
+            'Y-m-d H:i:s',
+            $otpExpiresTimestamp
+        );
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | UPDATE PENDING REGISTRATION
+    |--------------------------------------------------------------------------
+    |
+    | New OTP replaces the old OTP.
+    |
+    */
+
+    $update =
+        $pdo->prepare(
+            "UPDATE pending_registrations
+             SET
+                otp_code = ?,
+                otp_expires_at = ?
+             WHERE id = ?"
+        );
+
 
     $update->execute([
         $otp,
         $otpExpires,
-        $user['id']
+        $pending['id']
     ]);
 
 
     /*
-     * Create PHPMailer
-     */
+    |--------------------------------------------------------------------------
+    | CREATE EMAIL
+    |--------------------------------------------------------------------------
+    */
 
-    $mail = new PHPMailer(true);
+    $mail =
+        new PHPMailer(true);
+
+
     $mail->isSMTP();
-    $mail->Host = MAIL_HOST;
-    $mail->SMTPAuth = true;
-    $mail->Username = MAIL_USERNAME;
-    $mail->Password = MAIL_PASSWORD;
+
+
+    $mail->Host =
+        MAIL_HOST;
+
+
+    $mail->SMTPAuth =
+        true;
+
+
+    $mail->Username =
+        MAIL_USERNAME;
+
+
+    $mail->Password =
+        MAIL_PASSWORD;
+
+
     $mail->SMTPSecure =
         PHPMailer::ENCRYPTION_STARTTLS;
-    $mail->Port = MAIL_PORT;
+
+
+    $mail->Port =
+        MAIL_PORT;
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | FROM
+    |--------------------------------------------------------------------------
+    */
 
     $mail->setFrom(
         MAIL_FROM_EMAIL,
         MAIL_FROM_NAME
     );
-    
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | TO
+    |--------------------------------------------------------------------------
+    */
+
     $mail->addAddress(
-        $user['email'],
-        $user['full_name']
+        $pending['email'],
+        $pending['full_name']
     );
 
+
+    /*
+    |--------------------------------------------------------------------------
+    | EMAIL SETTINGS
+    |--------------------------------------------------------------------------
+    */
+
     $mail->isHTML(true);
+
 
     $mail->Subject =
         'AllHotels.lk - New Verification OTP';
 
 
     /*
-     * Email body
-     */
+    |--------------------------------------------------------------------------
+    | SAFE NAME
+    |--------------------------------------------------------------------------
+    */
+
+    $safeName =
+        htmlspecialchars(
+            $pending['full_name'],
+            ENT_QUOTES,
+            'UTF-8'
+        );
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | EMAIL BODY
+    |--------------------------------------------------------------------------
+    */
 
     $mail->Body = '
 
     <div style="
-        font-family: Arial, sans-serif;
-        max-width: 600px;
-        margin: auto;
-        padding: 30px;
-        background: #f8fafc;
+        font-family:Arial,sans-serif;
+        background:#f5f7f6;
+        padding:40px 20px;
     ">
 
         <div style="
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
+            max-width:540px;
+            margin:auto;
+            background:#ffffff;
+            border:1px solid #e5ebe7;
+            border-radius:18px;
+            padding:35px;
         ">
 
-            <h2 style="
-                color: #2563eb;
-                margin-bottom: 20px;
-            ">
-                AllHotels.lk
-            </h2>
-
-
-            <p>
-                Hello
-                <strong>
-                    ' . htmlspecialchars($user['full_name']) . '
-                </strong>,
-            </p>
-
-
-            <p>
-                You requested a new verification code.
-            </p>
-
-
-            <p>
-                Your new OTP is:
-            </p>
-
-
             <div style="
-                background: #f1f5f9;
-                padding: 20px;
-                text-align: center;
-                margin: 25px 0;
-                border-radius: 8px;
+                text-align:center;
+                margin-bottom:25px;
             ">
 
-                <span style="
-                    font-size: 32px;
-                    font-weight: bold;
-                    letter-spacing: 8px;
-                    color: #111827;
+                <h2 style="
+                    margin:0;
+                    color:#174c39;
+                    font-size:28px;
                 ">
-                    ' . $otp . '
-                </span>
+                    AllHotels.lk
+                </h2>
+
+                <p style="
+                    margin:8px 0 0;
+                    color:#7a867f;
+                    font-size:14px;
+                ">
+                    Email Verification
+                </p>
 
             </div>
 
 
-            <p>
-                This OTP will expire in
+            <p style="
+                color:#33463d;
+                font-size:14px;
+            ">
+
+                Hello
+
+                <strong>'
+                    . $safeName .
+                '</strong>,
+
+            </p>
+
+
+            <p style="
+                color:#65736b;
+                font-size:14px;
+                line-height:1.7;
+            ">
+
+                You requested a new verification code.
+                Use the code below to verify your
+                AllHotels.lk Hotel Owner account.
+
+            </p>
+
+
+            <div style="
+                margin:25px 0;
+                padding:24px 15px;
+                text-align:center;
+                background:#f2f8f4;
+                border:1px solid #d7e8dd;
+                border-radius:14px;
+            ">
+
+                <div style="
+                    margin-bottom:8px;
+                    color:#829087;
+                    font-size:11px;
+                    font-weight:bold;
+                    letter-spacing:1px;
+                ">
+                    NEW VERIFICATION CODE
+                </div>
+
+
+                <div style="
+                    color:#174c39;
+                    font-size:34px;
+                    font-weight:700;
+                    letter-spacing:8px;
+                ">
+                    '
+                    . $otp .
+                    '
+                </div>
+
+            </div>
+
+
+            <p style="
+                margin:0;
+                text-align:center;
+                color:#6c7971;
+                font-size:13px;
+            ">
+
+                This code expires in
                 <strong>5 minutes</strong>.
+
             </p>
 
 
-            <p style="color:#64748b;">
+            <p style="
+                margin:22px 0 0;
+                color:#909a94;
+                font-size:11px;
+                line-height:1.6;
+                text-align:center;
+            ">
+
                 If you did not request this code,
-                please ignore this email.
+                you can safely ignore this email.
+
             </p>
 
 
-            <br>
+            <p style="
+                margin-top:25px;
+                color:#65736b;
+                font-size:13px;
+            ">
 
-
-            <p>
                 Regards,<br>
-                <strong>AllHotels.lk Team</strong>
+
+                <strong>
+                    AllHotels.lk Team
+                </strong>
+
             </p>
 
         </div>
@@ -224,25 +442,45 @@ try {
 
 
     /*
-     * Plain text version
-     */
+    |--------------------------------------------------------------------------
+    | PLAIN TEXT EMAIL
+    |--------------------------------------------------------------------------
+    */
 
     $mail->AltBody =
-        "Your new AllHotels.lk verification OTP is: "
+        'Your new AllHotels.lk verification OTP is: '
         . $otp
-        . ". This OTP expires in 5 minutes.";
+        . '. This OTP expires in 5 minutes.';
 
 
     /*
-     * Send email
-     */
+    |--------------------------------------------------------------------------
+    | SEND EMAIL
+    |--------------------------------------------------------------------------
+    */
 
     $mail->send();
 
 
     /*
-     * Success message
-     */
+    |--------------------------------------------------------------------------
+    | UPDATE SESSION
+    |--------------------------------------------------------------------------
+    */
+
+    $_SESSION['verify_otp_sent_at'] =
+        time();
+
+
+    $_SESSION['verify_otp_expires_at'] =
+        $otpExpiresTimestamp;
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | SUCCESS MESSAGE
+    |--------------------------------------------------------------------------
+    */
 
     $_SESSION['flash_otp'] =
         'A new OTP has been sent to your email address.';
@@ -250,13 +488,47 @@ try {
 
 } catch (Exception $e) {
 
+    /*
+    |--------------------------------------------------------------------------
+    | EMAIL ERROR
+    |--------------------------------------------------------------------------
+    */
+
+    error_log(
+        'Registration OTP Resend Email Error: '
+        . $e->getMessage()
+    );
+
+
     $_SESSION['flash_otp_error'] =
         'Unable to send OTP. Please try again later.';
+
+
+} catch (PDOException $e) {
+
+    /*
+    |--------------------------------------------------------------------------
+    | DATABASE ERROR
+    |--------------------------------------------------------------------------
+    */
+
+    error_log(
+        'Registration OTP Resend Database Error: '
+        . $e->getMessage()
+    );
+
+
+    $_SESSION['flash_otp_error'] =
+        'Something went wrong. Please try again.';
 }
 
 
 /*
- * Go back to OTP page
- */
+|--------------------------------------------------------------------------
+| BACK TO VERIFY PAGE
+|--------------------------------------------------------------------------
+*/
 
-redirect('../auth/verify-otp.php');
+redirect(
+    '../auth/verify-otp.php'
+);
